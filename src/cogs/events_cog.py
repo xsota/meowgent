@@ -101,50 +101,70 @@ class EventsCog(commands.Cog):
       await channel.send(message)
 
   def add_message_to_history(self, message, role="user"):
+    import re
     author_id = message.author.id
     channel_id = message.channel.id
     content = message.content
     name = get_user_nickname(message.author)
 
-    text = content
+    text = content.strip()
 
     if channel_id not in self.channel_message_history:
       self.channel_message_history[channel_id] = []
 
-    # メッセージに添付ファイルがあるかチェック
+    # 添付画像がある場合は最初の1枚だけ処理
+    first_image_url = None
     if message.attachments:
       for attachment in message.attachments:
-        if 'image' in attachment.content_type:
-          self.channel_message_history[channel_id].append({
-            "role": role,
-            "content": [
-              {"type": "text", "text": f'{name}:{author_id} {text}'},
-              {"type": "image_url", "image_url": {"url": attachment.url}}
-            ]
-          })
+        if attachment.content_type and 'image' in attachment.content_type:
+          first_image_url = attachment.url
+          break  # 最初の1枚だけ扱うにゃ
 
-    if text == '':
-      return False
+    # テキスト + 画像がある場合
+    if first_image_url:
+      content_list = []
 
+      # テキスト（空でも入れるにゃ）
+      content_list.append({
+        "type": "text",
+        "text": f"{name}:{author_id} {text}"
+      })
 
-    if role == "user":
-      self.channel_message_history[channel_id].append({"role": "user", "content": f'{name}:{author_id} {text}'})
-    elif role == "assistant":
-      voice_state_update_pattern = re.compile(r'^.*が(.*)(からきえてくにゃ・・・|に入ったにゃ！)$')
-      if voice_state_update_pattern.match(content):
-        self.channel_message_history[channel_id].append({"role": "system", "content": f'{text}'})
-      else:
-        self.channel_message_history[channel_id].append({"role": "assistant", "content": f'{text}'})
-    elif role == "system":
-      self.channel_message_history[channel_id].append({"role": "system", "content": f'{text}'})
+      # 画像
+      content_list.append({
+        "type": "image_url",
+        "image_url": {
+          "url": first_image_url
+        }
+      })
+
+      self.channel_message_history[channel_id].append({
+        "role": role,
+        "content": content_list
+      })
+
+    # テキストだけある場合（画像がない or 既に追加済みでない）
+    elif text:
+      formatted_text = f"{name}:{author_id} {text}"
+      if role == "user":
+        self.channel_message_history[channel_id].append({"role": "user", "content": formatted_text})
+      elif role == "assistant":
+        voice_state_update_pattern = re.compile(r'^.*が(.*)(からきえてくにゃ・・・|に入ったにゃ！)$')
+        if voice_state_update_pattern.match(content):
+          self.channel_message_history[channel_id].append({"role": "system", "content": text})
+        else:
+          self.channel_message_history[channel_id].append({"role": "assistant", "content": text})
+      elif role == "system":
+        self.channel_message_history[channel_id].append({"role": "system", "content": text})
 
     # MAX_HISTORY_LENGTH件を超えた場合、最も古いメッセージを削除
     if len(self.channel_message_history[channel_id]) > self.MAX_HISTORY_LENGTH:
       self.channel_message_history[channel_id].pop(0)
 
     logger.info(self.channel_message_history)
-
     return True
+
+
 
   async def get_reply(self, message, gpt_messages=None):
     if gpt_messages is None:
