@@ -8,6 +8,7 @@ from discord.ext import commands
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+ChatOpenAI.model_rebuild()
 
 from tools.get_current_time import get_current_time
 from tools.task_manager import TaskManager
