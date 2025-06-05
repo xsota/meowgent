@@ -14,7 +14,7 @@ Pythonで構築されたカスタマイズ可能なインタラクティブDisco
 - Python 3.10+
 - Discord Bot Token
 - OpenAI API Key
-- Required Python libraries (see requirements.txt)
+- Required Python libraries (see src/requirements.txt)
 
 ### Installation
 ```sh
@@ -25,7 +25,7 @@ cd meowgent
 ```sh
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r src/requirements.txt
 ```
 
 ```sh
