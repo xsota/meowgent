@@ -96,7 +96,7 @@ class Meowgent:
     await self._notify_stamina_change()
 
   async def recover_stamina(self, amount):
-    self.stamina = min(100, self.stamina + amount)
+    self.stamina = min(self.max_stamina, self.stamina + amount)
     # logger.info(f"Stamina recovered by {amount}. Current stamina: {self.stamina}")
     await self._notify_stamina_change()
 
