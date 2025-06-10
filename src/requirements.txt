@@ -8,5 +8,5 @@ langchain_openai==0.3.3
 langgraph==0.2.69
 python-dotenv==1.0.1
 pytz==2024.2
-Requests==2.32.3
+Requests==2.32.4
 pydantic==2.10.6
