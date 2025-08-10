@@ -66,7 +66,9 @@ class EventsCog(commands.Cog):
     if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and len(self.channel_message_history[message.channel.id]) > 2:
       async with message.channel.typing():
         messages = await self.get_reply(message)
-        m = await message.channel.send(messages[-1].content)
+        # Format and guard against empty content
+        random_reply_text = self.safe_text_from_content(messages[-1].content)
+        m = await message.channel.send(random_reply_text)
 
       await self.wait_reply(m, messages)
       return
@@ -191,7 +193,9 @@ class EventsCog(commands.Cog):
     async with message.channel.typing():
       messages = await self.get_reply(message, gpt_messages)
 
-    reply_message = await message.reply(messages[-1].content)
+    # Format and guard against empty content
+    reply_text = self.safe_text_from_content(messages[-1].content)
+    reply_message = await message.reply(reply_text)
 
     await self.wait_reply(reply_message, messages)
 
@@ -218,6 +222,33 @@ class EventsCog(commands.Cog):
     except asyncio.TimeoutError:
       # メッセージが一定時間内に返信されなかった場合
       pass
+
+  def safe_text_from_content(self, content) -> str:
+    """Extract a safe, non-empty text from model content.
+    Supports string or list-of-parts (e.g., {"type":"text","text":...}).
+    Falls back to a placeholder if empty.
+    """
+    try:
+      # Simple string case
+      if isinstance(content, str):
+        text = content.strip()
+        return text if text else "…"
+
+      # OpenAI-style content parts
+      if isinstance(content, list):
+        parts = []
+        for part in content:
+          if isinstance(part, dict):
+            if part.get("type") == "text" and isinstance(part.get("text"), str):
+              parts.append(part["text"]) 
+        text = "\n".join([p for p in parts if p]).strip()
+        return text if text else "…"
+
+      # Fallback to string representation
+      text = str(content).strip()
+      return text if text else "…"
+    except Exception:
+      return "…"
 
 
 async def setup(bot: commands.Bot):
