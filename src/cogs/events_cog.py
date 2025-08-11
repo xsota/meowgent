@@ -10,7 +10,13 @@ import json
 from logging import getLogger
 from types import SimpleNamespace
 
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import (
+  ToolMessage,
+  SystemMessage,
+  HumanMessage,
+  AIMessage,
+)
+from langchain_openai import ChatOpenAI
 
 logger = getLogger(__name__)
 
@@ -43,6 +49,8 @@ class EventsCog(commands.Cog):
     self.leave_message = os.getenv('VOICE_LEAVE_MESSAGE', '{name}が{channel}からきえてくにゃ・・・')
     self.join_message = os.getenv('VOICE_JOIN_MESSAGE', '{name}が{channel}に入ったにゃ！')
     self.notification_channel_name = os.getenv('VOICE_NOTIFICATION_CHANNEL', 'general')  # 通知先チャンネル名
+    self.initial_max_tokens = int(os.getenv('OPEN_AI_MAX_TOKEN', '0'))
+    self.current_max_tokens = self.initial_max_tokens
 
 
   @commands.Cog.listener()
@@ -211,6 +219,62 @@ class EventsCog(commands.Cog):
       new_messages = final_state['messages'][len(conversation_messages):]
       conversation_messages.extend(new_messages)
       last_message = conversation_messages[-1]
+
+      finish_reason = None
+      if hasattr(last_message, "response_metadata"):
+        finish_reason = last_message.response_metadata.get("finish_reason")
+      if finish_reason == "length":
+        logger.warning("Token limit reached. Increasing max_tokens by 10% and retrying without tools.")
+        if conversation_messages:
+          conversation_messages.pop()
+        new_max = int(self.current_max_tokens * 1.1) if self.current_max_tokens else 0
+        cap = int(self.initial_max_tokens * 2)
+        if new_max > cap:
+          new_max = cap
+          logger.info(f"max_tokens increase capped at {cap}")
+        if new_max > self.current_max_tokens:
+          logger.info(f"Updating max_tokens: {self.current_max_tokens} -> {new_max}")
+          self.current_max_tokens = new_max
+          try:
+            self.bot.meowgent.model = self.bot.meowgent.model.bind(max_tokens=self.current_max_tokens)
+          except Exception as e:
+            logger.warning(f"Failed to rebind model with new max_tokens: {e}")
+        else:
+          logger.info(f"max_tokens remains at {self.current_max_tokens}")
+        system_prompt = SystemMessage(content=self.bot.meowgent.system_prompt)
+        channel_prompt = SystemMessage(content=f"current_channel_id: {message.channel.id}")
+        fallback_model = ChatOpenAI(
+          model=os.getenv('OPEN_AI_MODEL'),
+          openai_api_key=os.getenv('OPEN_AI_API_KEY'),
+          openai_api_base=os.getenv('OPEN_AI_API_URL'),
+          max_tokens=self.current_max_tokens,
+          temperature=float(os.getenv('TEMPERATURE', 1))
+        )
+        converted = []
+        for m in conversation_messages:
+          if isinstance(m, dict):
+            role = m.get("role")
+            content = m.get("content")
+            if role == "user":
+              converted.append(HumanMessage(content=content))
+            elif role == "assistant":
+              converted.append(AIMessage(content=content))
+            elif role == "system":
+              converted.append(SystemMessage(content=content))
+            else:
+              converted.append(HumanMessage(content=str(content)))
+          else:
+            converted.append(m)
+        response = fallback_model.invoke([system_prompt, channel_prompt] + converted)
+        reply_text = self.safe_text_from_content(response.content)
+        if reply_text == "…":
+          logger.error("Retry without tools failed: no textual content")
+          break
+        response.content = reply_text
+        conversation_messages.append(response)
+        mock_msg = SimpleNamespace(author=self.bot.user, channel=message.channel, content=reply_text, attachments=[])
+        self.add_message_to_history(mock_msg, role="assistant")
+        break
 
       # ツール呼び出しがある場合、実行して再試行
       if getattr(last_message, "tool_calls", None):
