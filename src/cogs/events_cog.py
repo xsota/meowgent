@@ -8,7 +8,7 @@ import random
 import json
 from logging import getLogger
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 
 logger = getLogger(__name__)
 
@@ -72,10 +72,13 @@ class EventsCog(commands.Cog):
         final_msg = messages[-1]
         if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
           logger.error("Random reply failed: final message is a tool call")
-          random_reply_text = "ごめんにゃ、うまく返事ができなかったにゃ。"
-        else:
-          # Format and guard against empty content
-          random_reply_text = self.safe_text_from_content(final_msg.content)
+          return
+        content = getattr(final_msg, "content", None)
+        if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
+          logger.error("Random reply failed: final message has no textual content")
+          return
+        # Format and guard against empty content
+        random_reply_text = self.safe_text_from_content(content)
         m = await message.channel.send(random_reply_text)
 
       await self.wait_reply(m, messages)
@@ -239,7 +242,6 @@ class EventsCog(commands.Cog):
     else:
       # 最大リトライ回数超過
       logger.error("Failed to obtain textual response after retries")
-      gpt_messages.append(AIMessage(content="ごめんにゃ、うまく返事ができなかったにゃ。"))
 
     return gpt_messages
 
@@ -252,10 +254,13 @@ class EventsCog(commands.Cog):
     final_msg = messages[-1]
     if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
       logger.error("Reply failed: final message is a tool call")
-      reply_text = "ごめんにゃ、うまく返事ができなかったにゃ。"
-    else:
-      # Format and guard against empty content
-      reply_text = self.safe_text_from_content(final_msg.content)
+      return
+    content = getattr(final_msg, "content", None)
+    if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
+      logger.error("Reply failed: final message has no textual content")
+      return
+    # Format and guard against empty content
+    reply_text = self.safe_text_from_content(content)
     reply_message = await message.reply(reply_text)
 
     await self.wait_reply(reply_message, messages)
