@@ -22,7 +22,14 @@ def remove_mentions(text):
 
 
 def get_user_nickname(member):
-  return member.name if member.nick is None else member.nick
+  """Return a user's display name, handling clients without ``nick``."""
+  nick = getattr(member, "nick", None)
+  name = getattr(member, "name", None)
+  if nick:
+    return nick
+  if name:
+    return name
+  return str(member)
 
 
 class EventsCog(commands.Cog):
