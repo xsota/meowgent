@@ -1,11 +1,15 @@
 import asyncio
 import os
+import copy
 
 import discord
 from discord.ext import commands
 import re
 import random
+import json
 from logging import getLogger
+
+from langchain_core.messages import ToolMessage
 
 logger = getLogger(__name__)
 
@@ -44,15 +48,12 @@ class EventsCog(commands.Cog):
 
   @commands.Cog.listener()
   async def on_message(self, message):
-    # メッセージ履歴にメッセージを追加
+    # bot自身のメッセージはここでは無視し、明示的に追加するにゃ
     if message.author == self.bot.user:
-      self.add_message_to_history(message,role="assistant")
-    else:
-      self.add_message_to_history(message)
-
-    # メッセージがbot自身からのものであれば、何もしない
-    if message.author.id == self.bot.user.id:
       return
+
+    # メッセージ履歴にユーザーのメッセージを追加
+    self.add_message_to_history(message)
 
     if str(self.bot.user.id) in message.content:
       if message.author.bot:  # 相手がbotの場合
@@ -65,12 +66,21 @@ class EventsCog(commands.Cog):
 
     if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and len(self.channel_message_history[message.channel.id]) > 2:
       async with message.channel.typing():
-        messages = await self.get_reply(message)
+        conversation_messages = await self.get_reply(message)
+        final_msg = conversation_messages[-1]
+        if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
+          logger.error("Random reply failed: final message is a tool call")
+          return
+        content = getattr(final_msg, "content", None)
+        if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
+          logger.error("Random reply failed: final message has no textual content")
+          return
         # Format and guard against empty content
-        random_reply_text = self.safe_text_from_content(messages[-1].content)
+        random_reply_text = self.safe_text_from_content(content)
         m = await message.channel.send(random_reply_text)
+        self.add_message_to_history(m, role="assistant")
 
-      await self.wait_reply(m, messages)
+      await self.wait_reply(m, conversation_messages)
       return
 
   @commands.Cog.listener()
@@ -100,7 +110,8 @@ class EventsCog(commands.Cog):
       message = self.join_message.format(name=name, channel=after.channel.name)
 
     async with channel.typing():
-      await channel.send(message)
+      sent = await channel.send(message)
+    self.add_message_to_history(sent, role="assistant")
 
   def add_message_to_history(self, message, role="user"):
     import re
@@ -168,38 +179,92 @@ class EventsCog(commands.Cog):
 
 
 
-  async def get_reply(self, message, gpt_messages=None):
-    if gpt_messages is None:
-      gpt_messages = self.channel_message_history[message.channel.id]
+  async def get_reply(self, message, conversation_messages=None):
+    channel_id = message.channel.id
+    if conversation_messages is None:
+      conversation_messages = copy.deepcopy(self.channel_message_history.get(channel_id, []))
+    max_retries = 3
+    retries = 0
 
-    # run agent
-    final_state = await self.bot.meowgent.app.ainvoke(
-      {
-        "messages": gpt_messages,
-        "current_channel_id": message.channel.id,
-      },
+    while retries < max_retries:
+      # run agent
+      final_state = await self.bot.meowgent.app.ainvoke(
+        {
+          "messages": conversation_messages,
+          "current_channel_id": channel_id,
+        },
+        config={"configurable": {"thread_id": channel_id, "recursion_limit": 5}}
+      )
 
-      config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}}
-    )
-    message = final_state['messages'][-1]
-    gpt_messages.append(message)
+      # 追加されたメッセージを履歴に格納
+      new_messages = final_state['messages'][len(conversation_messages):]
+      conversation_messages.extend(new_messages)
+      last_message = conversation_messages[-1]
 
-    return gpt_messages
+      # ツール呼び出しがある場合、実行して再試行
+      if getattr(last_message, "tool_calls", None):
+        logger.info(f"Tool call detected: {last_message.tool_calls}")
+        for tool_call in last_message.tool_calls:
+          tool_name = getattr(tool_call, "name", None) or tool_call.get("name")
+          tool_input = getattr(tool_call, "args", None) or tool_call.get("args") or tool_call.get("arguments")
+          tool_id = getattr(tool_call, "id", None) or tool_call.get("id")
+          if isinstance(tool_input, str):
+            try:
+              tool_input = json.loads(tool_input)
+            except Exception:
+              pass
+          logger.info(f"Executing tool {tool_name} with input {tool_input}")
+          tool = self.bot.meowgent.tools.get(tool_name) if self.bot.meowgent.tools else None
+          try:
+            if tool is None:
+              result = f"Tool {tool_name} not found"
+            elif hasattr(tool, "ainvoke"):
+              result = await tool.ainvoke(tool_input)
+            else:
+              result = tool.invoke(tool_input) if hasattr(tool, "invoke") else tool.run(tool_input)
+          except Exception as e:
+            logger.exception(f"Tool {tool_name} execution failed: {e}")
+            result = str(e)
+          conversation_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id, name=tool_name))
+        retries += 1
+        logger.info(f"Retrying model call after tool execution ({retries}/{max_retries})")
+        continue
 
-  async def reply_to(self, message, gpt_messages=None):
-    if gpt_messages is None:
-      gpt_messages = self.channel_message_history[message.channel.id]
+      content = last_message.content if hasattr(last_message, "content") else None
+      # content が空の場合は再試行
+      if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
+        retries += 1
+        logger.warning(f"Empty content received, retrying ({retries}/{max_retries})")
+        continue
 
+      # 正常なテキスト応答を得られた場合ループを抜ける
+      break
+
+    else:
+      # 最大リトライ回数超過
+      logger.error("Failed to obtain textual response after retries")
+
+    return conversation_messages
+
+  async def reply_to(self, message, conversation_messages=None):
     async with message.channel.typing():
-      messages = await self.get_reply(message, gpt_messages)
-
+      conversation_messages = await self.get_reply(message, conversation_messages)
+    final_msg = conversation_messages[-1]
+    if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
+      logger.error("Reply failed: final message is a tool call")
+      return
+    content = getattr(final_msg, "content", None)
+    if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
+      logger.error("Reply failed: final message has no textual content")
+      return
     # Format and guard against empty content
-    reply_text = self.safe_text_from_content(messages[-1].content)
+    reply_text = self.safe_text_from_content(content)
     reply_message = await message.reply(reply_text)
+    self.add_message_to_history(reply_message, role="assistant")
 
-    await self.wait_reply(reply_message, messages)
+    await self.wait_reply(reply_message, conversation_messages)
 
-  async def wait_reply(self, message, gpt_messages):
+  async def wait_reply(self, message, conversation_messages):
     def check(m):
       return (
         m.reference is not None
@@ -212,12 +277,12 @@ class EventsCog(commands.Cog):
       # メッセージがbotから送信された場合
       if msg.author.bot:
         if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1:  # ランダム返信
-          gpt_messages.append({"role": "user", "content": f"{get_user_nickname(msg.author)}「{msg.content}」"})
-          await self.reply_to(msg, gpt_messages)
+          conversation_messages.append({"role": "user", "content": f"{get_user_nickname(msg.author)}「{msg.content}」"})
+          await self.reply_to(msg, conversation_messages)
       else:
         # 人間から送信された場合、通常の処理
-        gpt_messages.append({"role": "user", "content": f"{get_user_nickname(msg.author)}「{msg.content}」"})
-        await self.reply_to(msg, gpt_messages)
+        conversation_messages.append({"role": "user", "content": f"{get_user_nickname(msg.author)}「{msg.content}」"})
+        await self.reply_to(msg, conversation_messages)
 
     except asyncio.TimeoutError:
       # メッセージが一定時間内に返信されなかった場合
