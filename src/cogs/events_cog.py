@@ -230,10 +230,10 @@ class EventsCog(commands.Cog):
         if new_max > self.current_max_tokens:
           logger.info(f"Updating max_tokens: {self.current_max_tokens} -> {new_max}")
           self.current_max_tokens = new_max
-          if hasattr(self.bot.meowgent.model, "max_tokens"):
-            self.bot.meowgent.model.max_tokens = self.current_max_tokens
-          if hasattr(self.bot.meowgent.model, "model_kwargs"):
-            self.bot.meowgent.model.model_kwargs["max_tokens"] = self.current_max_tokens
+          try:
+            self.bot.meowgent.model = self.bot.meowgent.model.bind(max_tokens=self.current_max_tokens)
+          except Exception as e:
+            logger.warning(f"Failed to rebind model with new max_tokens: {e}")
         else:
           logger.info(f"max_tokens remains at {self.current_max_tokens}")
         system_prompt = SystemMessage(content=self.bot.meowgent.system_prompt)
