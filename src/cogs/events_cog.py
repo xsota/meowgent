@@ -10,7 +10,12 @@ import json
 from logging import getLogger
 from types import SimpleNamespace
 
-from langchain_core.messages import ToolMessage, SystemMessage
+from langchain_core.messages import (
+  ToolMessage,
+  SystemMessage,
+  HumanMessage,
+  AIMessage,
+)
 from langchain_openai import ChatOpenAI
 
 logger = getLogger(__name__)
@@ -245,9 +250,28 @@ class EventsCog(commands.Cog):
           max_tokens=self.current_max_tokens,
           temperature=float(os.getenv('TEMPERATURE', 1))
         )
-        response = fallback_model.invoke([system_prompt, channel_prompt] + conversation_messages)
-        conversation_messages.append(response)
+        converted = []
+        for m in conversation_messages:
+          if isinstance(m, dict):
+            role = m.get("role")
+            content = m.get("content")
+            if role == "user":
+              converted.append(HumanMessage(content=content))
+            elif role == "assistant":
+              converted.append(AIMessage(content=content))
+            elif role == "system":
+              converted.append(SystemMessage(content=content))
+            else:
+              converted.append(HumanMessage(content=str(content)))
+          else:
+            converted.append(m)
+        response = fallback_model.invoke([system_prompt, channel_prompt] + converted)
         reply_text = self.safe_text_from_content(response.content)
+        if reply_text == "…":
+          logger.error("Retry without tools failed: no textual content")
+          break
+        response.content = reply_text
+        conversation_messages.append(response)
         mock_msg = SimpleNamespace(author=self.bot.user, channel=message.channel, content=reply_text, attachments=[])
         self.add_message_to_history(mock_msg, role="assistant")
         break
