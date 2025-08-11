@@ -5,7 +5,10 @@ import discord
 from discord.ext import commands
 import re
 import random
+import json
 from logging import getLogger
+
+from langchain_core.messages import AIMessage, ToolMessage
 
 logger = getLogger(__name__)
 
@@ -66,8 +69,13 @@ class EventsCog(commands.Cog):
     if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and len(self.channel_message_history[message.channel.id]) > 2:
       async with message.channel.typing():
         messages = await self.get_reply(message)
-        # Format and guard against empty content
-        random_reply_text = self.safe_text_from_content(messages[-1].content)
+        final_msg = messages[-1]
+        if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
+          logger.error("Random reply failed: final message is a tool call")
+          random_reply_text = "ごめんにゃ、うまく返事ができなかったにゃ。"
+        else:
+          # Format and guard against empty content
+          random_reply_text = self.safe_text_from_content(final_msg.content)
         m = await message.channel.send(random_reply_text)
 
       await self.wait_reply(m, messages)
@@ -171,18 +179,67 @@ class EventsCog(commands.Cog):
   async def get_reply(self, message, gpt_messages=None):
     if gpt_messages is None:
       gpt_messages = self.channel_message_history[message.channel.id]
+    max_retries = 3
+    retries = 0
 
-    # run agent
-    final_state = await self.bot.meowgent.app.ainvoke(
-      {
-        "messages": gpt_messages,
-        "current_channel_id": message.channel.id,
-      },
+    while retries < max_retries:
+      # run agent
+      final_state = await self.bot.meowgent.app.ainvoke(
+        {
+          "messages": gpt_messages,
+          "current_channel_id": message.channel.id,
+        },
+        config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}}
+      )
 
-      config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}}
-    )
-    message = final_state['messages'][-1]
-    gpt_messages.append(message)
+      # 追加されたメッセージを履歴に格納
+      new_messages = final_state['messages'][len(gpt_messages):]
+      gpt_messages.extend(new_messages)
+      last_message = gpt_messages[-1]
+
+      # ツール呼び出しがある場合、実行して再試行
+      if getattr(last_message, "tool_calls", None):
+        logger.info(f"Tool call detected: {last_message.tool_calls}")
+        for tool_call in last_message.tool_calls:
+          tool_name = getattr(tool_call, "name", None) or tool_call.get("name")
+          tool_input = getattr(tool_call, "args", None) or tool_call.get("args") or tool_call.get("arguments")
+          tool_id = getattr(tool_call, "id", None) or tool_call.get("id")
+          if isinstance(tool_input, str):
+            try:
+              tool_input = json.loads(tool_input)
+            except Exception:
+              pass
+          logger.info(f"Executing tool {tool_name} with input {tool_input}")
+          tool = self.bot.meowgent.tools.get(tool_name) if self.bot.meowgent.tools else None
+          try:
+            if tool is None:
+              result = f"Tool {tool_name} not found"
+            elif hasattr(tool, "ainvoke"):
+              result = await tool.ainvoke(tool_input)
+            else:
+              result = tool.invoke(tool_input) if hasattr(tool, "invoke") else tool.run(tool_input)
+          except Exception as e:
+            logger.exception(f"Tool {tool_name} execution failed: {e}")
+            result = str(e)
+          gpt_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id, name=tool_name))
+        retries += 1
+        logger.info(f"Retrying model call after tool execution ({retries}/{max_retries})")
+        continue
+
+      content = last_message.content if hasattr(last_message, "content") else None
+      # content が空の場合は再試行
+      if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
+        retries += 1
+        logger.warning(f"Empty content received, retrying ({retries}/{max_retries})")
+        continue
+
+      # 正常なテキスト応答を得られた場合ループを抜ける
+      break
+
+    else:
+      # 最大リトライ回数超過
+      logger.error("Failed to obtain textual response after retries")
+      gpt_messages.append(AIMessage(content="ごめんにゃ、うまく返事ができなかったにゃ。"))
 
     return gpt_messages
 
@@ -192,9 +249,13 @@ class EventsCog(commands.Cog):
 
     async with message.channel.typing():
       messages = await self.get_reply(message, gpt_messages)
-
-    # Format and guard against empty content
-    reply_text = self.safe_text_from_content(messages[-1].content)
+    final_msg = messages[-1]
+    if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
+      logger.error("Reply failed: final message is a tool call")
+      reply_text = "ごめんにゃ、うまく返事ができなかったにゃ。"
+    else:
+      # Format and guard against empty content
+      reply_text = self.safe_text_from_content(final_msg.content)
     reply_message = await message.reply(reply_text)
 
     await self.wait_reply(reply_message, messages)
