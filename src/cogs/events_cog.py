@@ -1,5 +1,6 @@
 import asyncio
 import os
+import copy
 
 import discord
 from discord.ext import commands
@@ -7,6 +8,7 @@ import re
 import random
 import json
 from logging import getLogger
+from types import SimpleNamespace
 
 from langchain_core.messages import ToolMessage
 
@@ -47,10 +49,8 @@ class EventsCog(commands.Cog):
 
   @commands.Cog.listener()
   async def on_message(self, message):
-    # メッセージ履歴にメッセージを追加
-    if message.author == self.bot.user:
-      self.add_message_to_history(message,role="assistant")
-    else:
+    # メッセージ履歴にメッセージを追加（bot自身のメッセージは get_reply で追加済み）
+    if message.author != self.bot.user:
       self.add_message_to_history(message)
 
     # メッセージがbot自身からのものであれば、何もしない
@@ -111,7 +111,10 @@ class EventsCog(commands.Cog):
       message = self.join_message.format(name=name, channel=after.channel.name)
 
     async with channel.typing():
-      await channel.send(message)
+      sent = await channel.send(message)
+
+    # bot メッセージも履歴に追加する
+    self.add_message_to_history(sent, role="assistant")
 
   def add_message_to_history(self, message, role="user"):
     import re
@@ -179,9 +182,11 @@ class EventsCog(commands.Cog):
 
 
 
-  async def get_reply(self, message, gpt_messages=None):
-    if gpt_messages is None:
-      gpt_messages = self.channel_message_history[message.channel.id]
+  async def get_reply(self, message, conversation_messages=None):
+    if conversation_messages is None:
+      conversation_messages = copy.deepcopy(self.channel_message_history.get(message.channel.id, []))
+    else:
+      conversation_messages = copy.deepcopy(conversation_messages)
     max_retries = 3
     retries = 0
 
@@ -189,16 +194,16 @@ class EventsCog(commands.Cog):
       # run agent
       final_state = await self.bot.meowgent.app.ainvoke(
         {
-          "messages": gpt_messages,
+          "messages": conversation_messages,
           "current_channel_id": message.channel.id,
         },
         config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}}
       )
 
       # 追加されたメッセージを履歴に格納
-      new_messages = final_state['messages'][len(gpt_messages):]
-      gpt_messages.extend(new_messages)
-      last_message = gpt_messages[-1]
+      new_messages = final_state['messages'][len(conversation_messages):]
+      conversation_messages.extend(new_messages)
+      last_message = conversation_messages[-1]
 
       # ツール呼び出しがある場合、実行して再試行
       if getattr(last_message, "tool_calls", None):
@@ -224,7 +229,7 @@ class EventsCog(commands.Cog):
           except Exception as e:
             logger.exception(f"Tool {tool_name} execution failed: {e}")
             result = str(e)
-          gpt_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id, name=tool_name))
+          conversation_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id, name=tool_name))
         retries += 1
         logger.info(f"Retrying model call after tool execution ({retries}/{max_retries})")
         continue
@@ -236,21 +241,24 @@ class EventsCog(commands.Cog):
         logger.warning(f"Empty content received, retrying ({retries}/{max_retries})")
         continue
 
-      # 正常なテキスト応答を得られた場合ループを抜ける
+      # 正常なテキスト応答を得られた場合、履歴に追加してループを抜ける
+      reply_text = self.safe_text_from_content(content)
+      mock_msg = SimpleNamespace(author=self.bot.user, channel=message.channel, content=reply_text, attachments=[])
+      self.add_message_to_history(mock_msg, role="assistant")
       break
 
     else:
       # 最大リトライ回数超過
       logger.error("Failed to obtain textual response after retries")
 
-    return gpt_messages
+    return conversation_messages
 
-  async def reply_to(self, message, gpt_messages=None):
-    if gpt_messages is None:
-      gpt_messages = self.channel_message_history[message.channel.id]
+  async def reply_to(self, message, conversation_messages=None):
+    if conversation_messages is None:
+      conversation_messages = self.channel_message_history[message.channel.id]
 
     async with message.channel.typing():
-      messages = await self.get_reply(message, gpt_messages)
+      messages = await self.get_reply(message, conversation_messages)
     final_msg = messages[-1]
     if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
       logger.error("Reply failed: final message is a tool call")
