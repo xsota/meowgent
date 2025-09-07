@@ -11,25 +11,18 @@ Pythonで構築されたカスタマイズ可能なインタラクティブDisco
 
 
 ## Setup
-- Python 3.10+
+- Python 3.12+
 - Discord Bot Token
 - OpenAI API Key
 - Required Python libraries (see src/requirements.txt)
 
 ### Installation
 ```sh
-git clone https://github.com/yourusername/meowgent.git
+git clone https://github.com/xsota/meowgent.git
 cd meowgent
-```
-
-```sh
-python3 -m venv venv
-source venv/bin/activate
-pip install -r src/requirements.txt
-```
-
-```sh
-python src/bot.py
+uv sync
+cp .env.example .env # 必要な値を .env に記入
+uv run python src/bot.py
 ```
 
 ## とりあえずChatGPTを使ったおれおれDiscord botが欲しい人
@@ -40,11 +33,6 @@ python src/bot.py
 - プロンプトとか環境変数を.env.exampleを参考に設定する
 ```
 fly deploy
-```
-
-## update requirements.txt
-```
-venv/bin/pipreqs --force src
 ```
 
 
