@@ -39,7 +39,7 @@ fly deploy
 
 ### yukariちゃん
 実際に運用されているbotの例です。
-雑談してくれたり、誰かがボイスチャンネルに参加したことや、Cryptoの価格を教えてくれるDiscord botです
+雑談してくれたり、誰かがボイスチャンネルに参加したことを教えてくれるDiscord botです
 
 <img width="256" height="256" alt="image" src="https://github.com/user-attachments/assets/bc7d7989-9b7b-46b5-b51a-a4bb5cd8a287" alt="yukariの画像" width=320 />
 
@@ -52,4 +52,3 @@ fly deploy
 Contributions are welcome! Feel free to submit issues or pull requests. Please ensure all new features are well-documented and tested.
 
 For detailed guidelines on how to contribute, please refer to the [CONTRIBUTING.md](./CONTRIBUTING.md) file.
-

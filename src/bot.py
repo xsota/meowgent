@@ -128,7 +128,6 @@ async def on_ready():
 async def setup_hook():
   # Cogロード
   await bot.load_extension("cogs.proposal_cog")
-  await bot.load_extension("cogs.price_cog")
   await bot.load_extension("cogs.events_cog")
 
   # コマンド反映
