@@ -1,6 +1,5 @@
 import os
 
-from langchain_core.tools import tool
 from typing import Dict
 from serpapi import GoogleSearch
 
@@ -11,7 +10,6 @@ from logging import getLogger
 logger = getLogger(__name__)
 
 
-@tool
 def web_search(query: str) -> Dict[str, str]:
   """web search"""
   search = GoogleSearch({

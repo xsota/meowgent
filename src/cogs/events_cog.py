@@ -6,17 +6,10 @@ import discord
 from discord.ext import commands
 import re
 import random
-import json
 from logging import getLogger
 from types import SimpleNamespace
 
-from langchain_core.messages import (
-  ToolMessage,
-  SystemMessage,
-  HumanMessage,
-  AIMessage,
-)
-from langchain_openai import ChatOpenAI
+from llm import LLMMessage
 
 logger = getLogger(__name__)
 
@@ -85,10 +78,10 @@ class EventsCog(commands.Cog):
       async with message.channel.typing():
         messages = await self.get_reply(message)
         final_msg = messages[-1]
-        if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
+        if self.is_tool_message(final_msg) or self.get_tool_calls(final_msg):
           logger.error("Random reply failed: final message is a tool call")
           return
-        content = getattr(final_msg, "content", None)
+        content = self.get_message_content(final_msg)
         if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
           logger.error("Random reply failed: final message has no textual content")
           return
@@ -221,8 +214,9 @@ class EventsCog(commands.Cog):
       last_message = conversation_messages[-1]
 
       finish_reason = None
-      if hasattr(last_message, "response_metadata"):
-        finish_reason = last_message.response_metadata.get("finish_reason")
+      response_metadata = self.get_response_metadata(last_message)
+      if response_metadata:
+        finish_reason = response_metadata.get("finish_reason")
       if finish_reason == "length":
         logger.warning("Token limit reached. Increasing max_tokens by 10% and retrying without tools.")
         if conversation_messages:
@@ -235,77 +229,35 @@ class EventsCog(commands.Cog):
         if new_max > self.current_max_tokens:
           logger.info(f"Updating max_tokens: {self.current_max_tokens} -> {new_max}")
           self.current_max_tokens = new_max
-          try:
-            self.bot.meowgent.model = self.bot.meowgent.model.bind(max_tokens=self.current_max_tokens)
-          except Exception as e:
-            logger.warning(f"Failed to rebind model with new max_tokens: {e}")
         else:
           logger.info(f"max_tokens remains at {self.current_max_tokens}")
-        system_prompt = SystemMessage(content=self.bot.meowgent.system_prompt)
-        channel_prompt = SystemMessage(content=f"current_channel_id: {message.channel.id}")
-        fallback_model = ChatOpenAI(
-          model=os.getenv('OPEN_AI_MODEL'),
-          openai_api_key=os.getenv('OPEN_AI_API_KEY'),
-          openai_api_base=os.getenv('OPEN_AI_API_URL'),
+        provider_messages = [
+          LLMMessage(role="system", content=self.bot.meowgent.system_prompt or ""),
+          LLMMessage(role="system", content=f"current_channel_id: {message.channel.id}"),
+          *conversation_messages,
+        ]
+        response = await self.bot.meowgent.provider.generate(
+          provider_messages,
+          tools=[],
           max_tokens=self.current_max_tokens,
-          temperature=float(os.getenv('TEMPERATURE', 1))
         )
-        converted = []
-        for m in conversation_messages:
-          if isinstance(m, dict):
-            role = m.get("role")
-            content = m.get("content")
-            if role == "user":
-              converted.append(HumanMessage(content=content))
-            elif role == "assistant":
-              converted.append(AIMessage(content=content))
-            elif role == "system":
-              converted.append(SystemMessage(content=content))
-            else:
-              converted.append(HumanMessage(content=str(content)))
-          else:
-            converted.append(m)
-        response = fallback_model.invoke([system_prompt, channel_prompt] + converted)
-        reply_text = self.safe_text_from_content(response.content)
+        response_message = response.to_message()
+        reply_text = self.safe_text_from_content(response_message.content)
         if reply_text == "…":
           logger.error("Retry without tools failed: no textual content")
           break
-        response.content = reply_text
-        conversation_messages.append(response)
+        response_message.content = reply_text
+        conversation_messages.append(response_message)
         mock_msg = SimpleNamespace(author=self.bot.user, channel=message.channel, content=reply_text, attachments=[])
         self.add_message_to_history(mock_msg, role="assistant")
         break
 
-      # ツール呼び出しがある場合、実行して再試行
-      if getattr(last_message, "tool_calls", None):
-        logger.info(f"Tool call detected: {last_message.tool_calls}")
-        for tool_call in last_message.tool_calls:
-          tool_name = getattr(tool_call, "name", None) or tool_call.get("name")
-          tool_input = getattr(tool_call, "args", None) or tool_call.get("args") or tool_call.get("arguments")
-          tool_id = getattr(tool_call, "id", None) or tool_call.get("id")
-          if isinstance(tool_input, str):
-            try:
-              tool_input = json.loads(tool_input)
-            except Exception:
-              pass
-          logger.info(f"Executing tool {tool_name} with input {tool_input}")
-          tool = self.bot.meowgent.tools.get(tool_name) if self.bot.meowgent.tools else None
-          try:
-            if tool is None:
-              result = f"Tool {tool_name} not found"
-            elif hasattr(tool, "ainvoke"):
-              result = await tool.ainvoke(tool_input)
-            else:
-              result = tool.invoke(tool_input) if hasattr(tool, "invoke") else tool.run(tool_input)
-          except Exception as e:
-            logger.exception(f"Tool {tool_name} execution failed: {e}")
-            result = str(e)
-          conversation_messages.append(ToolMessage(content=str(result), tool_call_id=tool_id, name=tool_name))
+      if self.is_tool_message(last_message) or self.get_tool_calls(last_message):
+        logger.error("Agent returned a tool call without a final text response")
         retries += 1
-        logger.info(f"Retrying model call after tool execution ({retries}/{max_retries})")
         continue
 
-      content = last_message.content if hasattr(last_message, "content") else None
+      content = self.get_message_content(last_message)
       # content が空の場合は再試行
       if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
         retries += 1
@@ -331,10 +283,10 @@ class EventsCog(commands.Cog):
     async with message.channel.typing():
       messages = await self.get_reply(message, conversation_messages)
     final_msg = messages[-1]
-    if isinstance(final_msg, ToolMessage) or getattr(final_msg, "tool_calls", None):
+    if self.is_tool_message(final_msg) or self.get_tool_calls(final_msg):
       logger.error("Reply failed: final message is a tool call")
       return
-    content = getattr(final_msg, "content", None)
+    content = self.get_message_content(final_msg)
     if not content or (isinstance(content, str) and not content.strip()) or (isinstance(content, list) and len(content) == 0):
       logger.error("Reply failed: final message has no textual content")
       return
@@ -394,6 +346,26 @@ class EventsCog(commands.Cog):
       return text if text else "…"
     except Exception:
       return "…"
+
+  def get_message_content(self, message):
+    if isinstance(message, dict):
+      return message.get("content")
+    return getattr(message, "content", None)
+
+  def get_tool_calls(self, message):
+    if isinstance(message, dict):
+      return message.get("tool_calls")
+    return getattr(message, "tool_calls", None)
+
+  def get_response_metadata(self, message):
+    if isinstance(message, dict):
+      return message.get("response_metadata")
+    return getattr(message, "response_metadata", None)
+
+  def is_tool_message(self, message):
+    if isinstance(message, dict):
+      return message.get("role") == "tool"
+    return getattr(message, "role", None) == "tool"
 
 
 async def setup(bot: commands.Bot):

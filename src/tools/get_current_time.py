@@ -1,8 +1,6 @@
 from datetime import datetime
 import pytz
-from langchain_core.tools import tool
 
-@tool
 def get_current_time(timezone_name="Asia/Tokyo"):
   """
   Get current time in the specified timezone.

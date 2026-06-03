@@ -1,14 +1,11 @@
-import datetime
 import os
 from datetime import datetime, timedelta
 from logging import basicConfig, getLogger, INFO
 
 import discord
 from discord.ext import commands
-from langchain_core.messages import SystemMessage
-from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 
+from llm import OpenAICompatibleChatProvider, ToolDefinition
 from tools.get_current_time import get_current_time
 from tools.task_manager import TaskManager
 from tools.web_search import web_search
@@ -37,10 +34,10 @@ async def on_ready():
   from meowgent import Meowgent
 
   # load llm
-  model = ChatOpenAI(
+  provider = OpenAICompatibleChatProvider(
     model=os.environ.get('OPEN_AI_MODEL'),
-    openai_api_key=os.environ.get('OPEN_AI_API_KEY'),
-    openai_api_base=os.environ.get('OPEN_AI_API_URL'),
+    api_key=os.environ.get('OPEN_AI_API_KEY'),
+    base_url=os.environ.get('OPEN_AI_API_URL'),
     max_tokens=int(os.environ.get('OPEN_AI_MAX_TOKEN')),
     temperature=float(os.environ.get('TEMPERATURE', 1))
   )
@@ -51,7 +48,7 @@ async def on_ready():
     try:
       final_state = await bot.meowgent.app.ainvoke(
         {
-          "messages": [SystemMessage(content=prompt)],
+          "messages": [{"role": "user", "content": prompt}],
           "current_channel_id": channel_id
         },
 
@@ -62,7 +59,6 @@ async def on_ready():
     except Exception as e:
       logger.error(f"error: {e}")
 
-  @tool
   def create_task(channel_id: int, prompt: str, minutes_later: int):
     """
     Schedule a new task to run after a specified time.
@@ -88,9 +84,59 @@ async def on_ready():
 
   # tools settings
   tools = [
-    web_search,
-    create_task,
-    get_current_time,
+    ToolDefinition(
+      name="web_search",
+      description="Search the web for the given query.",
+      parameters={
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Search query.",
+          },
+        },
+        "required": ["query"],
+      },
+      handler=web_search,
+    ),
+    ToolDefinition(
+      name="create_task",
+      description="Schedule a task to run after the specified number of minutes.",
+      parameters={
+        "type": "object",
+        "properties": {
+          "channel_id": {
+            "type": "integer",
+            "description": "Discord channel ID where the task will run.",
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Prompt to run as the scheduled task.",
+          },
+          "minutes_later": {
+            "type": "integer",
+            "description": "Minutes from now when the task will execute.",
+          },
+        },
+        "required": ["channel_id", "prompt", "minutes_later"],
+      },
+      handler=create_task,
+    ),
+    ToolDefinition(
+      name="get_current_time",
+      description="Get current time in the specified timezone.",
+      parameters={
+        "type": "object",
+        "properties": {
+          "timezone_name": {
+            "type": "string",
+            "description": "Timezone name, e.g. Asia/Tokyo.",
+          },
+        },
+        "required": ["timezone_name"],
+      },
+      handler=get_current_time,
+    ),
   ]
 
   # character settings
@@ -98,7 +144,7 @@ async def on_ready():
 
   # Meowgent initialize
   bot.meowgent = Meowgent(
-    model=model,
+    provider=provider,
     tools=tools,
     system_prompt=character_prompt
   )
