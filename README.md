@@ -18,7 +18,7 @@ Pythonで構築されたカスタマイズ可能なインタラクティブDisco
 
 ### Installation
 ```sh
-git clone https://github.com/xsota/meowgent.git<img width="384" height="155" alt="image" src="https://github.com/user-attachments/assets/4e85cee7-7e63-4cfe-b70b-611e69433764" />
+git clone https://github.com/xsota/meowgent.git
 
 cd meowgent
 uv sync
