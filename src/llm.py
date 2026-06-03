@@ -1,6 +1,5 @@
 import inspect
 import json
-import os
 from dataclasses import dataclass
 from typing import Any, Callable, Optional, Protocol
 
@@ -100,12 +99,12 @@ class OpenAICompatibleChatProvider:
     max_tokens: Optional[int] = None,
     temperature: Optional[float] = None,
   ):
-    self.model = model or os.environ.get("OPEN_AI_MODEL")
+    self.model = model
     self.max_tokens = max_tokens
     self.temperature = temperature
     self.client = AsyncOpenAI(
-      api_key=api_key or os.environ.get("OPEN_AI_API_KEY"),
-      base_url=base_url or os.environ.get("OPEN_AI_API_URL") or None,
+      api_key=api_key,
+      base_url=base_url or None,
     )
 
   async def generate(

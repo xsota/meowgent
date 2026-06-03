@@ -1,5 +1,4 @@
 import asyncio
-import os
 import copy
 
 import discord
@@ -9,6 +8,7 @@ import random
 from logging import getLogger
 from types import SimpleNamespace
 
+from config import load_config
 from llm import LLMMessage
 
 logger = getLogger(__name__)
@@ -38,11 +38,12 @@ class EventsCog(commands.Cog):
 
   def __init__(self, bot):
     self.bot = bot
-    self.voice_notification_enabled = os.getenv('VOICE_NOTIFICATION_ENABLED', 'false').lower() == 'true'
-    self.leave_message = os.getenv('VOICE_LEAVE_MESSAGE', '{name}が{channel}からきえてくにゃ・・・')
-    self.join_message = os.getenv('VOICE_JOIN_MESSAGE', '{name}が{channel}に入ったにゃ！')
-    self.notification_channel_name = os.getenv('VOICE_NOTIFICATION_CHANNEL', 'general')  # 通知先チャンネル名
-    self.initial_max_tokens = int(os.getenv('OPEN_AI_MAX_TOKEN', '0'))
+    config = load_config()
+    self.voice_notification_enabled = config.voice_notification.enabled
+    self.leave_message = config.voice_notification.leave_message
+    self.join_message = config.voice_notification.join_message
+    self.notification_channel_name = config.voice_notification.channel_name
+    self.initial_max_tokens = config.openai.max_tokens
     self.current_max_tokens = self.initial_max_tokens
 
 

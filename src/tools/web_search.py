@@ -1,11 +1,7 @@
-import os
-
 from typing import Dict
 from serpapi import GoogleSearch
 
-from dotenv import load_dotenv
-load_dotenv()
-
+from config import load_config
 from logging import getLogger
 logger = getLogger(__name__)
 
@@ -15,7 +11,7 @@ def web_search(query: str) -> Dict[str, str]:
   search = GoogleSearch({
     "engine": "yahoo",
     "p": query,
-    "api_key": os.environ.get('SERP_API_KEY')
+    "api_key": load_config().serp_api_key
   })
   result = search.get_dict()
 

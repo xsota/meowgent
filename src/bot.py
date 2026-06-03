@@ -1,10 +1,10 @@
-import os
 from datetime import datetime, timedelta
 from logging import basicConfig, getLogger, INFO
 
 import discord
 from discord.ext import commands
 
+from config import load_config
 from llm import OpenAICompatibleChatProvider, ToolDefinition
 from tools.get_current_time import get_current_time
 from tools.task_manager import TaskManager
@@ -13,11 +13,7 @@ from tools.web_search import web_search
 basicConfig(level=INFO)
 logger = getLogger(__name__)
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-DISCORD_TOKEN = os.environ.get('DISCORD_BOT_TOKEN')
+config = load_config()
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -35,11 +31,11 @@ async def on_ready():
 
   # load llm
   provider = OpenAICompatibleChatProvider(
-    model=os.environ.get('OPEN_AI_MODEL'),
-    api_key=os.environ.get('OPEN_AI_API_KEY'),
-    base_url=os.environ.get('OPEN_AI_API_URL'),
-    max_tokens=int(os.environ.get('OPEN_AI_MAX_TOKEN')),
-    temperature=float(os.environ.get('TEMPERATURE', 1))
+    model=config.openai.model,
+    api_key=config.openai.api_key,
+    base_url=config.openai.api_url,
+    max_tokens=config.openai.max_tokens,
+    temperature=config.openai.temperature
   )
 
   # Task Manager
@@ -140,9 +136,8 @@ async def on_ready():
   ]
 
   # character settings
-  character_prompt = os.environ.get('CHARACTER_PROMPT')
   runtime_prompt = f"- Your Discord user ID is {bot.user.id}"
-  system_prompt = f"{runtime_prompt}\n\n{character_prompt or ''}"
+  system_prompt = f"{runtime_prompt}\n\n{config.character_prompt}"
 
   # Meowgent initialize
   bot.meowgent = Meowgent(
@@ -181,4 +176,4 @@ async def setup_hook():
   # コマンド反映
   await bot.tree.sync()
 
-bot.run(DISCORD_TOKEN)
+bot.run(config.discord_token)

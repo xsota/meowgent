@@ -1,12 +1,8 @@
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
+from config import load_config
 from llm import OpenAICompatibleChatProvider, ToolDefinition
 from meowgent import Meowgent
 
-character_prompt = os.environ.get('CHARACTER_PROMPT')
+config = load_config()
 
 
 def search(query: str):
@@ -34,18 +30,18 @@ tools = [
 ]
 
 provider = OpenAICompatibleChatProvider(
-  model=os.environ.get('OPEN_AI_MODEL'),
-  api_key=os.environ.get('OPEN_AI_API_KEY'),
-  base_url=os.environ.get('OPEN_AI_API_URL'),
-  max_tokens=int(os.environ.get('OPEN_AI_MAX_TOKEN')),
-  temperature=float(os.environ.get('TEMPERATURE', 1))
+  model=config.openai.model,
+  api_key=config.openai.api_key,
+  base_url=config.openai.api_url,
+  max_tokens=config.openai.max_tokens,
+  temperature=config.openai.temperature
 )
 print("[INFO] モデルが初期化されました。")
 
 meowgent = Meowgent(
   provider=provider,
   tools=tools,
-  system_prompt=character_prompt,
+  system_prompt=config.character_prompt,
 )
 
 print("[INFO] 実行を開始します。")
