@@ -26,7 +26,7 @@ cp .env.example .env # 必要な値を .env に記入
 uv run python src/bot.py
 ```
 
-## とりあえずChatGPTを使ったおれおれDiscord botが欲しい人
+## 自分専用のDiscord AI botを作る
 - https://discord.com/developers/applications Discord Tokenを取得する
 - git cloneする
 - fly.ioのアカウントを作ったりする
