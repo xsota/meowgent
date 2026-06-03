@@ -141,12 +141,14 @@ async def on_ready():
 
   # character settings
   character_prompt = os.environ.get('CHARACTER_PROMPT')
+  runtime_prompt = f"- Your Discord user ID is {bot.user.id}"
+  system_prompt = f"{runtime_prompt}\n\n{character_prompt or ''}"
 
   # Meowgent initialize
   bot.meowgent = Meowgent(
     provider=provider,
     tools=tools,
-    system_prompt=character_prompt
+    system_prompt=system_prompt
   )
 
   async def on_stamina_change(stamina: int, max_stamina: int):
