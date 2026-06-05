@@ -1,17 +1,22 @@
 import asyncio
 import copy
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Any
 
 import discord
 from discord.ext import commands
 import re
 import random
 from logging import getLogger
-from types import SimpleNamespace
 
 from config import load_config
 from llm import LLMMessage
 
 logger = getLogger(__name__)
+
+MessageContent = str | list[dict[str, Any]]
+VOICE_STATE_UPDATE_PATTERN = re.compile(r'^.*が(.*)(からきえてくにゃ・・・|に入ったにゃ！)$')
 
 
 def remove_mentions(text):
@@ -31,13 +36,54 @@ def get_user_nickname(member):
   return str(member)
 
 
+@dataclass
+class ConversationMessage:
+  message_id: int
+  channel_id: int
+  author_id: int
+  author_name: str
+  role: str
+  content: MessageContent
+  created_at: Any
+
+  def to_llm_message(self) -> dict[str, Any]:
+    return {
+      "role": self.role,
+      "content": self.content,
+    }
+
+
+class ShortTermMemory:
+  def __init__(self, max_length: int):
+    self.max_length = max_length
+    self._messages_by_channel: dict[int, list[ConversationMessage]] = {}
+
+  def add(self, message: ConversationMessage):
+    messages = self._messages_by_channel.setdefault(message.channel_id, [])
+    messages_by_id = {item.message_id: item for item in messages}
+    messages_by_id[message.message_id] = message
+    merged = sorted(messages_by_id.values(), key=lambda item: item.created_at)
+    self._messages_by_channel[message.channel_id] = merged[-self.max_length:]
+
+  def get(self, channel_id: int) -> list[ConversationMessage]:
+    return list(self._messages_by_channel.get(channel_id, []))
+
+  def merge(self, channel_id: int, messages: list[ConversationMessage]) -> list[ConversationMessage]:
+    for message in messages:
+      self.add(message)
+    return self.get(channel_id)
+
+
 class EventsCog(commands.Cog):
   MAX_HISTORY_LENGTH = 10
   RANDOM_REPLY_CHANCE = 36
-  channel_message_history = {}
+  HISTORY_FETCH_MIN_MESSAGES = 3
+  HISTORY_FETCH_GAP = timedelta(minutes=5)
 
   def __init__(self, bot):
     self.bot = bot
+    self.short_term_memory = ShortTermMemory(self.MAX_HISTORY_LENGTH)
+    self.channel_message_history = {}
     config = load_config()
     self.voice_notification_enabled = config.voice_notification.enabled
     self.leave_message = config.voice_notification.leave_message
@@ -58,7 +104,7 @@ class EventsCog(commands.Cog):
 
   @commands.Cog.listener()
   async def on_message(self, message):
-    # メッセージ履歴にメッセージを追加（bot自身のメッセージは get_reply で追加済み）
+    # メッセージ履歴にメッセージを追加
     if message.author != self.bot.user:
       self.add_message_to_history(message)
 
@@ -68,14 +114,14 @@ class EventsCog(commands.Cog):
 
     if str(self.bot.user.id) in message.content:
       if message.author.bot:  # 相手がbotの場合
-        if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and len(self.channel_message_history[message.channel.id]) > 2:
+        if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and self.has_enough_context(message.channel.id):
           await self.reply_to(message)  # ランダムに返信
         return
       else:  # 相手が人間の場合は必ず返信
         await self.reply_to(message)
         return
 
-    if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and len(self.channel_message_history[message.channel.id]) > 2:
+    if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1 and self.has_enough_context(message.channel.id):
       async with message.channel.typing():
         messages = await self.get_reply(message)
         final_msg = messages[-1]
@@ -89,6 +135,7 @@ class EventsCog(commands.Cog):
         # Format and guard against empty content
         random_reply_text = self.safe_text_from_content(content)
         m = await message.channel.send(random_reply_text)
+        self.add_message_to_history(m, role="assistant")
 
       await self.wait_reply(m, messages)
       return
@@ -125,75 +172,130 @@ class EventsCog(commands.Cog):
     # bot メッセージも履歴に追加する
     self.add_message_to_history(sent, role="assistant")
 
+  def has_enough_context(self, channel_id: int) -> bool:
+    return len(self.short_term_memory.get(channel_id)) > 2
+
   def add_message_to_history(self, message, role="user"):
-    import re
+    conversation_message = self.to_conversation_message(message, role=role)
+    if conversation_message is None:
+      return False
+
+    self.short_term_memory.add(conversation_message)
+    self.sync_legacy_history(conversation_message.channel_id)
+    logger.info(self.channel_message_history)
+    return True
+
+  def to_conversation_message(self, message, role="user") -> ConversationMessage | None:
     author_id = message.author.id
     channel_id = message.channel.id
-    content = message.content
+    content = message.content or ""
     name = get_user_nickname(message.author)
-
     text = content.strip()
-
-    if channel_id not in self.channel_message_history:
-      self.channel_message_history[channel_id] = []
-
-    # 添付画像がある場合は最初の1枚だけ処理
     first_image_url = None
-    if message.attachments:
+    attachments = getattr(message, "attachments", [])
+    if attachments:
       for attachment in message.attachments:
         if attachment.content_type and 'image' in attachment.content_type:
           first_image_url = attachment.url
-          break  # 最初の1枚だけ扱うにゃ
+          break
 
-    # テキスト + 画像がある場合
-    if first_image_url:
-      content_list = []
-
-      # テキスト（空でも入れるにゃ）
-      content_list.append({
-        "type": "text",
-        "text": f"{name}:{author_id} {text}"
-      })
-
-      # 画像
-      content_list.append({
-        "type": "image_url",
-        "image_url": {
-          "url": first_image_url
-        }
-      })
-
-      self.channel_message_history[channel_id].append({
-        "role": role,
-        "content": content_list
-      })
-
-    # テキストだけある場合（画像がない or 既に追加済みでない）
+    normalized_role = role
+    normalized_content: MessageContent | None = None
+    if first_image_url is not None:
+      normalized_content = [
+        {
+          "type": "text",
+          "text": f"{name}:{author_id} {text}"
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": first_image_url
+          }
+        },
+      ]
     elif text:
-      formatted_text = f"{name}:{author_id} {text}"
       if role == "user":
-        self.channel_message_history[channel_id].append({"role": "user", "content": formatted_text})
+        normalized_content = f"{name}:{author_id} {text}"
       elif role == "assistant":
-        voice_state_update_pattern = re.compile(r'^.*が(.*)(からきえてくにゃ・・・|に入ったにゃ！)$')
-        if voice_state_update_pattern.match(content):
-          self.channel_message_history[channel_id].append({"role": "system", "content": text})
+        if VOICE_STATE_UPDATE_PATTERN.match(content):
+          normalized_role = "system"
+          normalized_content = text
         else:
-          self.channel_message_history[channel_id].append({"role": "assistant", "content": text})
+          normalized_content = text
       elif role == "system":
-        self.channel_message_history[channel_id].append({"role": "system", "content": text})
+        normalized_content = text
 
-    # MAX_HISTORY_LENGTH件を超えた場合、最も古いメッセージを削除
-    if len(self.channel_message_history[channel_id]) > self.MAX_HISTORY_LENGTH:
-      self.channel_message_history[channel_id].pop(0)
+    if normalized_content is None:
+      return None
 
-    logger.info(self.channel_message_history)
-    return True
+    return ConversationMessage(
+      message_id=message.id,
+      channel_id=channel_id,
+      author_id=author_id,
+      author_name=name,
+      role=normalized_role,
+      content=normalized_content,
+      created_at=message.created_at,
+    )
+
+  def sync_legacy_history(self, channel_id: int):
+    self.channel_message_history[channel_id] = [
+      message.to_llm_message()
+      for message in self.short_term_memory.get(channel_id)
+    ]
+
+  async def build_conversation_context(self, message):
+    channel_id = message.channel.id
+    memory_messages = self.short_term_memory.get(channel_id)
+    if self.should_fetch_discord_history(message, memory_messages):
+      try:
+        fetched_messages = []
+        async for history_message in message.channel.history(limit=self.MAX_HISTORY_LENGTH):
+          conversation_message = self.to_conversation_message(
+            history_message,
+            role="assistant" if history_message.author.id == self.bot.user.id else "user",
+          )
+          if conversation_message is not None:
+            fetched_messages.append(conversation_message)
+        memory_messages = self.short_term_memory.merge(channel_id, fetched_messages)
+        self.sync_legacy_history(channel_id)
+      except Exception:
+        logger.exception("Failed to fetch Discord channel history.")
+
+    return [
+      conversation_message.to_llm_message()
+      for conversation_message in self.short_term_memory.get(channel_id)
+    ]
+
+  def should_fetch_discord_history(self, message, memory_messages: list[ConversationMessage]) -> bool:
+    if not memory_messages:
+      return True
+    if len(memory_messages) < self.HISTORY_FETCH_MIN_MESSAGES:
+      return True
+    reference = getattr(message, "reference", None)
+    reference_message_id = getattr(reference, "message_id", None)
+    if reference_message_id is not None and not any(item.message_id == reference_message_id for item in memory_messages):
+      return True
+    content = getattr(message, "content", "") or ""
+    if str(self.bot.user.id) in content and len(memory_messages) < self.MAX_HISTORY_LENGTH:
+      return True
+
+    previous_messages = [
+      item for item in memory_messages
+      if item.message_id != message.id
+    ]
+    if not previous_messages:
+      return False
+
+    latest_message = max(previous_messages, key=lambda item: item.created_at)
+    return message.created_at - latest_message.created_at >= self.HISTORY_FETCH_GAP
 
 
 
   async def get_reply(self, message, conversation_messages=None):
     if conversation_messages is None:
-      conversation_messages = copy.deepcopy(self.channel_message_history.get(message.channel.id, []))
+      conversation_messages = await self.build_conversation_context(message)
     else:
       conversation_messages = copy.deepcopy(conversation_messages)
     max_retries = 3
@@ -249,8 +351,6 @@ class EventsCog(commands.Cog):
           break
         response_message.content = reply_text
         conversation_messages.append(response_message)
-        mock_msg = SimpleNamespace(author=self.bot.user, channel=message.channel, content=reply_text, attachments=[])
-        self.add_message_to_history(mock_msg, role="assistant")
         break
 
       if self.is_tool_message(last_message) or self.get_tool_calls(last_message):
@@ -267,8 +367,7 @@ class EventsCog(commands.Cog):
 
       # 正常なテキスト応答を得られた場合、履歴に追加してループを抜ける
       reply_text = self.safe_text_from_content(content)
-      mock_msg = SimpleNamespace(author=self.bot.user, channel=message.channel, content=reply_text, attachments=[])
-      self.add_message_to_history(mock_msg, role="assistant")
+      last_message.content = reply_text
       break
 
     else:
@@ -278,9 +377,6 @@ class EventsCog(commands.Cog):
     return conversation_messages
 
   async def reply_to(self, message, conversation_messages=None):
-    if conversation_messages is None:
-      conversation_messages = self.channel_message_history[message.channel.id]
-
     async with message.channel.typing():
       messages = await self.get_reply(message, conversation_messages)
     final_msg = messages[-1]
@@ -294,6 +390,7 @@ class EventsCog(commands.Cog):
     # Format and guard against empty content
     reply_text = self.safe_text_from_content(content)
     reply_message = await message.reply(reply_text)
+    self.add_message_to_history(reply_message, role="assistant")
 
     await self.wait_reply(reply_message, messages)
 
@@ -310,12 +407,12 @@ class EventsCog(commands.Cog):
       # メッセージがbotから送信された場合
       if msg.author.bot:
         if random.randint(1, self.RANDOM_REPLY_CHANCE) == 1:  # ランダム返信
-          gpt_messages.append({"role": "user", "content": f"{get_user_nickname(msg.author)}「{msg.content}」"})
-          await self.reply_to(msg, gpt_messages)
+          self.add_message_to_history(msg)
+          await self.reply_to(msg)
       else:
         # 人間から送信された場合、通常の処理
-        gpt_messages.append({"role": "user", "content": f"{get_user_nickname(msg.author)}「{msg.content}」"})
-        await self.reply_to(msg, gpt_messages)
+        self.add_message_to_history(msg)
+        await self.reply_to(msg)
 
     except asyncio.TimeoutError:
       # メッセージが一定時間内に返信されなかった場合

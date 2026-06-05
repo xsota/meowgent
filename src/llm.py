@@ -5,7 +5,6 @@ from typing import Any, Callable, Optional, Protocol
 
 from openai import AsyncOpenAI
 
-
 MessageContent = str | list[dict[str, Any]]
 
 
@@ -120,7 +119,7 @@ class OpenAICompatibleChatProvider:
     }
     request_max_tokens = max_tokens if max_tokens is not None else self.max_tokens
     if request_max_tokens:
-      request["max_tokens"] = request_max_tokens
+      request["max_completion_tokens"] = request_max_tokens
     if self.temperature is not None:
       request["temperature"] = self.temperature
     if tools:
@@ -149,17 +148,7 @@ class OpenAICompatibleChatProvider:
     )
 
   async def _create_completion(self, request: dict[str, Any]):
-    try:
-      return await self.client.chat.completions.create(**request)
-    except Exception as error:
-      if "max_tokens" not in request:
-        raise
-      retry_request = dict(request)
-      retry_request["max_completion_tokens"] = retry_request.pop("max_tokens")
-      try:
-        return await self.client.chat.completions.create(**retry_request)
-      except Exception:
-        raise error
+    return await self.client.chat.completions.create(**request)
 
 
 def to_llm_message(message: LLMMessage | dict[str, Any]) -> LLMMessage:
