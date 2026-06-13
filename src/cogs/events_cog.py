@@ -245,7 +245,7 @@ class EventsCog(commands.Cog):
       for message in self.short_term_memory.get(channel_id)
     ]
 
-  async def build_conversation_context(self, message):
+  async def build_conversation_messages(self, message) -> list[ConversationMessage]:
     channel_id = message.channel.id
     memory_messages = self.short_term_memory.get(channel_id)
     if self.should_fetch_discord_history(message, memory_messages):
@@ -263,9 +263,12 @@ class EventsCog(commands.Cog):
       except Exception:
         logger.exception("Failed to fetch Discord channel history.")
 
+    return self.short_term_memory.get(channel_id)
+
+  async def build_conversation_context(self, message):
     return [
       conversation_message.to_llm_message()
-      for conversation_message in self.short_term_memory.get(channel_id)
+      for conversation_message in await self.build_conversation_messages(message)
     ]
 
   def should_fetch_discord_history(self, message, memory_messages: list[ConversationMessage]) -> bool:
@@ -291,11 +294,107 @@ class EventsCog(commands.Cog):
     latest_message = max(previous_messages, key=lambda item: item.created_at)
     return message.created_at - latest_message.created_at >= self.HISTORY_FETCH_GAP
 
+  def split_for_compression(self, conversation_messages: list[ConversationMessage]):
+    latest_non_bot_index = None
+    bot_user_id = self.bot.user.id
+    for index in range(len(conversation_messages) - 1, -1, -1):
+      if conversation_messages[index].author_id != bot_user_id:
+        latest_non_bot_index = index
+        break
+
+    if latest_non_bot_index is None:
+      return [], conversation_messages
+    return (
+      conversation_messages[:latest_non_bot_index],
+      conversation_messages[latest_non_bot_index:],
+    )
+
+  async def compress_old_conversation_messages(self, messages: list[ConversationMessage]) -> dict[str, str] | None:
+    if not messages:
+      return None
+
+    rendered_messages = "\n".join(
+      self.render_conversation_message_for_summary(message)
+      for message in messages
+    )
+    response = await self.bot.meowgent.provider.generate(
+      [
+        LLMMessage(
+          role="system",
+          content=(
+            "Summarize these Discord conversation messages for future context. "
+            "Keep user names and IDs, decisions, unresolved topics, facts needed for the next reply, "
+            "and image URLs with their surrounding text. Be concise."
+          ),
+        ),
+        LLMMessage(role="user", content=rendered_messages),
+      ],
+      tools=[],
+      max_tokens=self.current_max_tokens or None,
+    )
+    summary = self.safe_text_from_content(response.content)
+    if summary == "…":
+      return None
+    return {
+      "role": "system",
+      "content": f"Conversation summary before the latest user message:\n{summary}",
+    }
+
+  def render_conversation_message_for_summary(self, message: ConversationMessage) -> str:
+    if isinstance(message.content, list):
+      parts = []
+      for part in message.content:
+        if not isinstance(part, dict):
+          continue
+        if part.get("type") == "text":
+          parts.append(str(part.get("text", "")))
+        elif part.get("type") == "image_url":
+          image_url = part.get("image_url", {}).get("url")
+          if image_url:
+            parts.append(f"[image: {image_url}]")
+      content = " ".join(part for part in parts if part).strip() or "…"
+    else:
+      content = self.safe_text_from_content(message.content)
+    return f"{message.created_at.isoformat()} {message.role} {message.author_name}:{message.author_id} {content}"
+
+  async def build_compressed_retry_context(self, conversation_record_messages: list[ConversationMessage]):
+    older_messages, raw_messages = self.split_for_compression(conversation_record_messages)
+    if not older_messages:
+      return [
+        message.to_llm_message()
+        for message in conversation_record_messages
+      ]
+
+    try:
+      summary_message = await self.compress_old_conversation_messages(older_messages)
+    except Exception:
+      logger.exception("Failed to compress conversation history.")
+      return [
+        message.to_llm_message()
+        for message in conversation_record_messages
+      ]
+
+    if summary_message is None:
+      return [
+        message.to_llm_message()
+        for message in conversation_record_messages
+      ]
+
+    return [
+      summary_message,
+      *[message.to_llm_message() for message in raw_messages],
+    ]
+
 
 
   async def get_reply(self, message, conversation_messages=None):
+    conversation_record_messages = None
     if conversation_messages is None:
-      conversation_messages = await self.build_conversation_context(message)
+      conversation_record_messages = await self.build_conversation_messages(message)
+      conversation_messages = [
+        conversation_message.to_llm_message()
+        for conversation_message in conversation_record_messages
+      ]
     else:
       conversation_messages = copy.deepcopy(conversation_messages)
     max_retries = 3
@@ -321,23 +420,16 @@ class EventsCog(commands.Cog):
       if response_metadata:
         finish_reason = response_metadata.get("finish_reason")
       if finish_reason == "length":
-        logger.warning("Token limit reached. Increasing max_tokens by 10% and retrying without tools.")
+        logger.warning("Token limit reached. Compressing history and retrying without tools.")
         if conversation_messages:
           conversation_messages.pop()
-        new_max = int(self.current_max_tokens * 1.1) if self.current_max_tokens else 0
-        cap = int(self.initial_max_tokens * 2)
-        if new_max > cap:
-          new_max = cap
-          logger.info(f"max_tokens increase capped at {cap}")
-        if new_max > self.current_max_tokens:
-          logger.info(f"Updating max_tokens: {self.current_max_tokens} -> {new_max}")
-          self.current_max_tokens = new_max
-        else:
-          logger.info(f"max_tokens remains at {self.current_max_tokens}")
+        retry_messages = conversation_messages
+        if conversation_record_messages is not None:
+          retry_messages = await self.build_compressed_retry_context(conversation_record_messages)
         provider_messages = [
           LLMMessage(role="system", content=self.bot.meowgent.system_prompt or ""),
           LLMMessage(role="system", content=f"current_channel_id: {message.channel.id}"),
-          *conversation_messages,
+          *retry_messages,
         ]
         response = await self.bot.meowgent.provider.generate(
           provider_messages,

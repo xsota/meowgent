@@ -8,6 +8,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from cogs.events_cog import ConversationMessage, EventsCog, ShortTermMemory
+from llm import LLMResponse
 
 
 def fake_message(
@@ -37,6 +38,8 @@ def fake_cog(bot_user_id=999):
   cog.bot = SimpleNamespace(user=SimpleNamespace(id=bot_user_id))
   cog.short_term_memory = ShortTermMemory(cog.MAX_HISTORY_LENGTH)
   cog.channel_message_history = {}
+  cog.initial_max_tokens = 100
+  cog.current_max_tokens = 100
   return cog
 
 
@@ -207,6 +210,107 @@ class ConversationContextTest(unittest.TestCase):
         [message["content"] for message in context],
         ["sota:100 older", "sota:100 newer", "sota:100 current"],
       )
+
+    asyncio.run(run_test())
+
+
+class CompressionTest(unittest.TestCase):
+  def test_split_for_compression_keeps_latest_non_bot_message_and_later_messages(self):
+    cog = fake_cog(bot_user_id=999)
+    now = datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+    messages = [
+      ConversationMessage(1, 10, 100, "sota", "user", "old user", now),
+      ConversationMessage(2, 10, 999, "bot", "assistant", "old bot", now + timedelta(minutes=1)),
+      ConversationMessage(3, 10, 101, "nana", "user", "latest user", now + timedelta(minutes=2)),
+      ConversationMessage(4, 10, 999, "bot", "assistant", "latest bot", now + timedelta(minutes=3)),
+    ]
+
+    older, raw = cog.split_for_compression(messages)
+
+    self.assertEqual([message.message_id for message in older], [1, 2])
+    self.assertEqual([message.message_id for message in raw], [3, 4])
+
+  def test_summary_render_keeps_image_urls(self):
+    cog = fake_cog()
+    message = ConversationMessage(
+      1,
+      10,
+      100,
+      "sota",
+      "user",
+      [
+        {"type": "text", "text": "sota:100 look"},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+      ],
+      datetime(2026, 6, 5, tzinfo=timezone.utc),
+    )
+
+    rendered = cog.render_conversation_message_for_summary(message)
+
+    self.assertIn("sota:100 look", rendered)
+    self.assertIn("https://example.com/image.png", rendered)
+
+  def test_length_retry_uses_compressed_history_without_tools(self):
+    async def run_test():
+      now = datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+      channel = SimpleNamespace(id=10)
+      current_message = fake_message(message_id=3, channel_id=10, content="latest", created_at=now)
+      current_message.channel = channel
+
+      class FakeApp:
+        async def ainvoke(self, state, config=None):
+          return {
+            "messages": [
+              *state["messages"],
+              LLMResponse(
+                content="truncated",
+                tool_calls=[],
+                finish_reason="length",
+                raw=None,
+              ).to_message(),
+            ]
+          }
+
+      class FakeProvider:
+        def __init__(self):
+          self.calls = []
+
+        async def generate(self, messages, tools=None, max_tokens=None, tool_choice=None):
+          self.calls.append({
+            "messages": messages,
+            "tools": tools,
+            "max_tokens": max_tokens,
+          })
+          if len(self.calls) == 1:
+            return LLMResponse("summary", [], "stop", None)
+          return LLMResponse("final reply", [], "stop", None)
+
+      provider = FakeProvider()
+      cog = fake_cog(bot_user_id=999)
+      cog.bot.meowgent = SimpleNamespace(
+        app=FakeApp(),
+        provider=provider,
+        system_prompt="system prompt",
+      )
+      cog.short_term_memory.add(ConversationMessage(1, 10, 100, "sota", "user", "old", now - timedelta(minutes=2)))
+      cog.short_term_memory.add(ConversationMessage(2, 10, 999, "bot", "assistant", "old bot", now - timedelta(minutes=1)))
+      cog.short_term_memory.add(ConversationMessage(3, 10, 101, "nana", "user", "nana:101 latest", now))
+
+      messages = await cog.get_reply(current_message)
+
+      self.assertEqual(cog.current_max_tokens, 100)
+      self.assertEqual(messages[-1].content, "final reply")
+      self.assertEqual(len(provider.calls), 2)
+      retry_call = provider.calls[1]
+      self.assertEqual(retry_call["tools"], [])
+      self.assertEqual(retry_call["max_tokens"], 100)
+      retry_contents = [
+        message.get("content") if isinstance(message, dict) else message.content
+        for message in retry_call["messages"]
+      ]
+      self.assertIn("Conversation summary before the latest user message:\nsummary", retry_contents)
+      self.assertIn("nana:101 latest", retry_contents)
+      self.assertNotIn("sota:100 old", retry_contents)
 
     asyncio.run(run_test())
 
