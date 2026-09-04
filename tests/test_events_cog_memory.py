@@ -214,6 +214,28 @@ class ConversationContextTest(unittest.TestCase):
     asyncio.run(run_test())
 
 
+class MemoryContextTest(unittest.TestCase):
+  def test_build_memory_context_contains_discord_scope_and_source_ids(self):
+    cog = fake_cog()
+    now = datetime(2026, 6, 5, 12, 0, tzinfo=timezone.utc)
+    current = fake_message(message_id=3, channel_id=10, author_id=100, created_at=now)
+    current.guild = SimpleNamespace(id=20)
+    records = [
+      ConversationMessage(1, 10, 100, "sota", "user", "one", now),
+      ConversationMessage(2, 10, 999, "bot", "assistant", "two", now),
+    ]
+
+    context = cog.build_memory_context(current, records)
+
+    self.assertEqual(context.requester_user_id, "100")
+    self.assertEqual(context.guild_id, "20")
+    self.assertEqual(context.channel_id, "10")
+    self.assertEqual(context.context_type, "guild")
+    self.assertEqual(context.access_scope, "GUILD")
+    self.assertEqual(context.source_message_ids, ("1", "2", "3"))
+    self.assertEqual(context.happened_at, "2026-06-05T12:00:00.000Z")
+
+
 class CompressionTest(unittest.TestCase):
   def test_split_for_compression_keeps_latest_non_bot_message_and_later_messages(self):
     cog = fake_cog(bot_user_id=999)

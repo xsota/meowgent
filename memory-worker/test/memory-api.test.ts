@@ -191,6 +191,34 @@ describe("memory API", () => {
     expect((await responseJson(archivedSearchResponse)).memories).toHaveLength(1);
   });
 
+  it("can restrict search results to a subject user", async () => {
+    for (const subjectUserId of ["user-1", "user-2"]) {
+      const response = await request("/memories", {
+        method: "POST",
+        body: JSON.stringify({
+          kind: "episode",
+          content: "shared subject search phrase",
+          subject_user_id: subjectUserId,
+          access_scope: "PUBLIC",
+        }),
+      });
+      expect(response.status).toBe(201);
+    }
+
+    const response = await request("/memories/search", {
+      method: "POST",
+      body: JSON.stringify({
+        query: "shared subject search phrase",
+        subject_user_id: "user-1",
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const result = await responseJson(response);
+    expect(result.memories).toHaveLength(1);
+    expect(result.memories[0].subject_user_id).toBe("user-1");
+  });
+
   it("rejects impossible and non-ISO timestamps", async () => {
     for (const happenedAt of ["2026-02-30", "August 25, 2026"]) {
       const response = await request("/memories", {

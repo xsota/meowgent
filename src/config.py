@@ -52,12 +52,24 @@ class VoiceNotificationConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+  api_url: str | None
+  api_token: str | None
+  timeout_seconds: float
+
+  @property
+  def enabled(self) -> bool:
+    return bool(self.api_url and self.api_token)
+
+
+@dataclass(frozen=True)
 class AppConfig:
   discord_token: str | None
   character_prompt: str
   serp_api_key: str | None
   openai: OpenAIConfig
   voice_notification: VoiceNotificationConfig
+  memory: MemoryConfig
 
 
 def load_config() -> AppConfig:
@@ -78,5 +90,10 @@ def load_config() -> AppConfig:
       leave_message=os.environ.get("VOICE_LEAVE_MESSAGE", "{name}が{channel}からきえてくにゃ・・・"),
       join_message=os.environ.get("VOICE_JOIN_MESSAGE", "{name}が{channel}に入ったにゃ！"),
       channel_name=os.environ.get("VOICE_NOTIFICATION_CHANNEL", "general"),
+    ),
+    memory=MemoryConfig(
+      api_url=_optional_env("MEMORY_API_URL"),
+      api_token=_optional_env("MEMORY_API_TOKEN"),
+      timeout_seconds=_float_env("MEMORY_API_TIMEOUT", 10.0),
     ),
   )

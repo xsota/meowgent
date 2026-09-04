@@ -11,7 +11,9 @@ Pythonで構築されたカスタマイズ可能なインタラクティブDisco
 
 ## Long-term memory (Phase 1)
 
-Cloudflare Worker + D1で構成する長期記憶APIの基盤は [`memory-worker/`](./memory-worker/) にあります。Python Discord BotからD1へ直接接続せず、Memory APIを経由する構成です。現在のPR1では、認証付きMemory CRUD、Memory Source、D1 migration、dev/prod分離、ACL付き最小検索までを実装しています。短期会話履歴は従来どおりPython側で保持します。
+Cloudflare Worker + D1で構成する長期記憶APIは [`memory-worker/`](./memory-worker/) にあります。Python Discord BotからD1へ直接接続せず、Memory APIを経由する構成です。PR1のAPI基盤に加えて、PR2では会話中にmeowgent自身が使う`remember_memory` / `search_memory` Toolを実装しています。短期会話履歴は従来どおりPython側で保持します。
+
+Active Memoryを有効にするには、`MEMORY_API_URL`と`MEMORY_API_TOKEN`を設定してください。Token未設定時はMemory Toolを無効化します。
 
 セットアップとデプロイ手順は [`memory-worker/README.md`](./memory-worker/README.md) を参照してください。
 

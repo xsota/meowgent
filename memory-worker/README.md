@@ -1,6 +1,6 @@
 # meowgent Memory API Worker
 
-Cloudflare Worker + D1 foundation for meowgent's long-term memory. The Worker is intentionally independent from the Python Discord bot; the bot will access it over HTTPS in a later PR.
+Cloudflare Worker + D1 foundation for meowgent's long-term memory. The Worker is intentionally independent from the Python Discord bot; Active Memory accesses it over HTTPS through the Python `MemoryClient`.
 
 ## Environments
 
@@ -11,7 +11,7 @@ The Wrangler environments are deliberately separate:
 | `dev` | `meowgent-memory-dev` | `meowgent-dev` |
 | `prod` | `meowgent-memory-prod` | `yukari` |
 
-The placeholder UUIDs in `wrangler.jsonc` are distinct local-only IDs. Create the two D1 databases and replace each matching placeholder with the database ID returned by Wrangler before using a remote database. This prevents dev and prod local state from being shared and prevents a first deployment from accidentally pointing at an unknown database.
+The placeholder UUID in the `dev` environment is a local-only ID. The `prod` environment is configured for the existing `yukari` D1 database. This keeps dev and prod local state separate and prevents a first deployment from accidentally pointing at an unknown database.
 
 ```sh
 cd memory-worker
@@ -56,7 +56,7 @@ All `/memories` endpoints require:
 Authorization: Bearer <MEMORY_API_TOKEN>
 ```
 
-`POST /memories` creates one `episode` or `note`. `access_scope` is required so a caller cannot accidentally create a memory with an ambiguous privacy policy. `source_message_ids` is a convenience form for Discord sources; the normalized source rows are returned in `sources`.
+`POST /memories` creates one `episode` or `note`. `access_scope` is required so a caller cannot accidentally create a memory with an ambiguous privacy policy. `source_message_ids` is a convenience form for Discord sources; the normalized source rows are returned in `sources`. Search accepts an optional `subject_user_id` filter.
 
 Timestamp fields use `YYYY-MM-DDTHH:mm:ss[.SSS](Z|+/-HH:mm)`. Impossible dates, timezone-less values, and non-ISO date strings are rejected.
 

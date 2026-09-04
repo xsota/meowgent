@@ -6,7 +6,10 @@ from discord.ext import commands
 
 from config import load_config
 from llm import OpenAICompatibleResponsesProvider, ToolDefinition
+from memory.client import MemoryClient
+from memory.service import MemoryService
 from tools.get_current_time import get_current_time
+from tools.memory import MEMORY_SYSTEM_PROMPT, create_memory_tools
 from tools.task_manager import TaskManager
 from tools.web_search import web_search
 
@@ -20,6 +23,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!?!!?', intents=intents)
 bot.meowgent = None
+bot.memory_service = None
 
 appId = None
 
@@ -38,6 +42,19 @@ async def on_ready():
     temperature=config.openai.temperature,
     reasoning_effort=config.openai.reasoning_effort,
   )
+
+  if config.memory.enabled:
+    memory_client = MemoryClient(
+      api_url=config.memory.api_url,
+      api_token=config.memory.api_token,
+      timeout_seconds=config.memory.timeout_seconds,
+    )
+  else:
+    memory_client = None
+    if config.memory.api_url or config.memory.api_token:
+      logger.warning("Memory API configuration is incomplete; memory tools are disabled.")
+  memory_service = MemoryService(memory_client)
+  bot.memory_service = memory_service
 
   # Task Manager
   task_manager = TaskManager()
@@ -135,10 +152,15 @@ async def on_ready():
       handler=get_current_time,
     ),
   ]
+  if memory_service.enabled:
+    tools.extend(create_memory_tools(memory_service))
 
   # character settings
   runtime_prompt = f"- Your Discord user ID is {bot.user.id}"
-  system_prompt = f"{runtime_prompt}\n\n{config.character_prompt}"
+  prompt_parts = [runtime_prompt, config.character_prompt]
+  if memory_service.enabled:
+    prompt_parts.append(MEMORY_SYSTEM_PROMPT)
+  system_prompt = "\n\n".join(part for part in prompt_parts if part)
 
   # Meowgent initialize
   bot.meowgent = Meowgent(

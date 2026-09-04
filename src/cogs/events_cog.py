@@ -1,7 +1,7 @@
 import asyncio
 import copy
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import discord
@@ -12,6 +12,7 @@ from logging import getLogger
 
 from config import load_config
 from llm import LLMMessage
+from memory.models import MemoryContext
 
 logger = getLogger(__name__)
 
@@ -385,6 +386,50 @@ class EventsCog(commands.Cog):
       *[message.to_llm_message() for message in raw_messages],
     ]
 
+  def build_memory_context(
+    self,
+    message,
+    conversation_record_messages: list[ConversationMessage] | None = None,
+  ) -> MemoryContext:
+    source_message_ids = []
+    for conversation_message in conversation_record_messages or []:
+      message_id = getattr(conversation_message, "message_id", None)
+      if message_id is not None:
+        source_message_ids.append(str(message_id))
+
+    current_message_id = getattr(message, "id", None)
+    if current_message_id is not None:
+      source_message_ids.append(str(current_message_id))
+
+    created_at = getattr(message, "created_at", None)
+    if not isinstance(created_at, datetime):
+      created_at = datetime.now(timezone.utc)
+    elif created_at.tzinfo is None:
+      created_at = created_at.replace(tzinfo=timezone.utc)
+    happened_at = created_at.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace(
+      "+00:00",
+      "Z",
+    )
+
+    guild = getattr(message, "guild", None)
+    guild_id = getattr(guild, "id", None)
+    return MemoryContext(
+      requester_user_id=str(message.author.id),
+      guild_id=str(guild_id) if guild_id is not None else None,
+      channel_id=str(message.channel.id),
+      context_type="guild" if guild_id is not None else "dm",
+      happened_at=happened_at,
+      source_message_ids=tuple(dict.fromkeys(source_message_ids)),
+    )
+
+  async def invoke_agent(self, state, config, memory_context: MemoryContext):
+    memory_service = getattr(self.bot, "memory_service", None)
+    if memory_service is None:
+      return await self.bot.meowgent.app.ainvoke(state, config=config)
+
+    with memory_service.bind_context(memory_context):
+      return await self.bot.meowgent.app.ainvoke(state, config=config)
+
 
 
   async def get_reply(self, message, conversation_messages=None):
@@ -397,17 +442,19 @@ class EventsCog(commands.Cog):
       ]
     else:
       conversation_messages = copy.deepcopy(conversation_messages)
+    memory_context = self.build_memory_context(message, conversation_record_messages)
     max_retries = 3
     retries = 0
 
     while retries < max_retries:
       # run agent
-      final_state = await self.bot.meowgent.app.ainvoke(
+      final_state = await self.invoke_agent(
         {
           "messages": conversation_messages,
           "current_channel_id": message.channel.id,
         },
-        config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}}
+        config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}},
+        memory_context=memory_context,
       )
 
       # 追加されたメッセージを履歴に格納

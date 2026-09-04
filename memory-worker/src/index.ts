@@ -91,6 +91,7 @@ interface ListOptions {
   query?: string;
   kind?: MemoryKind;
   accessScope?: AccessScope;
+  subjectUserId?: string;
   includeArchived: boolean;
   limit: number;
 }
@@ -751,6 +752,10 @@ async function listMemories(
     clauses.push("access_scope = ?");
     params.push(options.accessScope);
   }
+  if (options.subjectUserId !== undefined) {
+    clauses.push("subject_user_id = ?");
+    params.push(options.subjectUserId);
+  }
 
   const rows = await db.prepare(`
     SELECT ${MEMORY_COLUMNS}
@@ -947,10 +952,12 @@ async function handleSearch(request: Request, env: Env): Promise<Response> {
   const record = await readJson(request);
   const query = parseRequiredText(record.query, "query", 1_000);
   const context = parseRequestContext(record);
+  const subjectUserId = parseIdentifier(record.subject_user_id, "subject_user_id");
   const includeArchived = parseBoolean(record.include_archived, "include_archived", false);
   const limit = parseLimit(record.limit, 5);
   const memories = await listMemories(env.MEMORY_DB, context, {
     query,
+    subjectUserId: subjectUserId ?? undefined,
     includeArchived,
     limit,
   });
@@ -964,8 +971,12 @@ async function handleList(request: Request, env: Env, url: URL): Promise<Respons
   const query = queryValue === null ? undefined : parseRequiredText(queryValue, "query", 1_000);
   const kindValue = url.searchParams.get("kind");
   const accessScopeValue = url.searchParams.get("access_scope");
+  const subjectUserIdValue = url.searchParams.get("subject_user_id");
   const kind = kindValue === null ? undefined : parseKind(kindValue);
   const accessScope = accessScopeValue === null ? undefined : parseAccessScope(accessScopeValue);
+  const subjectUserId = subjectUserIdValue === null
+    ? undefined
+    : parseIdentifier(subjectUserIdValue, "subject_user_id", false);
   const includeArchived = parseQueryBoolean(
     url.searchParams.get("include_archived"),
     "include_archived",
@@ -976,6 +987,7 @@ async function handleList(request: Request, env: Env, url: URL): Promise<Respons
     query,
     kind,
     accessScope,
+    subjectUserId,
     includeArchived,
     limit,
   });
