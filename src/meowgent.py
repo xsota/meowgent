@@ -1,17 +1,35 @@
 import asyncio
 import json
 from logging import getLogger
-from typing import Callable, List
+from typing import Any, Callable, List
 
 from llm import (
   LLMMessage,
   LLMProvider,
   ToolDefinition,
+  content_to_text,
   parse_tool_arguments,
   to_llm_message,
 )
 
 logger = getLogger(__name__)
+
+
+def _message_log_summary(message: LLMMessage) -> dict[str, Any]:
+  """Return useful message metadata without logging message contents."""
+  tool_names = []
+  for tool_call in message.tool_calls or []:
+    function = tool_call.get("function", {})
+    name = function.get("name")
+    if isinstance(name, str) and name:
+      tool_names.append(name)
+
+  return {
+    "role": message.role,
+    "name": message.name,
+    "content_length": len(content_to_text(message.content)),
+    "tool_names": tool_names,
+  }
 
 
 class MeowgentApp:
@@ -58,7 +76,10 @@ class Meowgent:
     input_items = None
 
     for _ in range(recursion_limit):
-      logger.info(f"[ainvoke] Messages passed to the provider: {[message.content for message in messages]}")
+      logger.info(
+        "[ainvoke] Messages passed to the provider: %s",
+        [_message_log_summary(message) for message in messages],
+      )
       response = await self.provider.generate(
         messages,
         list(self.tools.values()),
@@ -68,7 +89,17 @@ class Meowgent:
       assistant_message = response.to_message()
       messages.append(assistant_message)
       output_messages.append(assistant_message)
-      logger.info(f"[ainvoke] Response from the provider: {response.raw}")
+      logger.info(
+        "[ainvoke] Provider response: finish_reason=%s status=%s tool_names=%s response_id=%s",
+        response.finish_reason,
+        response.status,
+        [
+          call.get("function", {}).get("name")
+          for call in response.tool_calls
+          if isinstance(call.get("function", {}).get("name"), str)
+        ],
+        response.response_id,
+      )
       await self.reduce_stamina(5) # スタミナ使う
 
       if not response.tool_calls:

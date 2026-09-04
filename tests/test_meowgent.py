@@ -94,6 +94,64 @@ class MeowgentToolLoopTest(unittest.TestCase):
 
     asyncio.run(run_test())
 
+  def test_does_not_log_message_tool_or_provider_contents(self):
+    async def run_test():
+      private_memory = "private memory content that must not be logged"
+      private_provider_output = "private provider output that must not be logged"
+      tool_calls = [{
+        "id": "call_1",
+        "call_id": "call_1",
+        "type": "function",
+        "function": {
+          "name": "search_memory",
+          "arguments": '{"query":"private"}',
+        },
+      }]
+      provider = FakeProvider([
+        LLMResponse(
+          content=None,
+          tool_calls=tool_calls,
+          finish_reason="tool_calls",
+          raw={"private": private_provider_output},
+          response_id="resp_1",
+          status="completed",
+        ),
+        LLMResponse(
+          content="done",
+          tool_calls=[],
+          finish_reason="stop",
+          raw={"private": private_provider_output},
+          response_id="resp_2",
+          status="completed",
+        ),
+      ])
+      tool = ToolDefinition(
+        name="search_memory",
+        description="Search memories.",
+        parameters={
+          "type": "object",
+          "properties": {"query": {"type": "string"}},
+          "required": ["query"],
+        },
+        handler=lambda query: {
+          "status": "ok",
+          "memories": [{"content": private_memory}],
+        },
+      )
+      meowgent = Meowgent(provider=provider, tools=[tool], system_prompt="system")
+
+      with self.assertLogs("meowgent", level="INFO") as logs:
+        await meowgent.ainvoke({
+          "messages": [{"role": "user", "content": private_memory}],
+          "current_channel_id": 10,
+        })
+
+      logged = "\n".join(logs.output)
+      self.assertNotIn(private_memory, logged)
+      self.assertNotIn(private_provider_output, logged)
+
+    asyncio.run(run_test())
+
 
 if __name__ == "__main__":
   unittest.main()
