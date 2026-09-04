@@ -1,0 +1,3 @@
+# Copy to .dev.vars.dev for local development.
+# Use a different token for the deployed dev and prod Workers.
+MEMORY_API_TOKEN="replace-with-a-local-development-token"

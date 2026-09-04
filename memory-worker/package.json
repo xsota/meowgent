@@ -1,0 +1,25 @@
+{
+  "name": "meowgent-memory-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --env dev",
+    "dev:prod": "wrangler dev --env prod",
+    "deploy:dev": "wrangler deploy --env dev",
+    "deploy:prod": "wrangler deploy --env prod",
+    "db:migrate:local": "wrangler d1 migrations apply meowgent-dev --env dev --local",
+    "db:migrate:dev": "wrangler d1 migrations apply meowgent-dev --env dev --remote",
+    "db:migrate:prod": "wrangler d1 migrations apply yukari --env prod --remote",
+    "types": "wrangler types",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@cloudflare/vitest-plugin": "^1.0.0",
+    "@cloudflare/workers-types": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.0.0"
+  }
+}

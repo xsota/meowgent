@@ -9,6 +9,12 @@ Pythonで構築されたカスタマイズ可能なインタラクティブDisco
 - ツールの統合: Web検索などの外部ツールをサポート (SERP API)
 - 環境変数による設定: ボットの挙動やメッセージを環境変数で簡単に設定可能。
 
+## Long-term memory (Phase 1)
+
+Cloudflare Worker + D1で構成する長期記憶APIの基盤は [`memory-worker/`](./memory-worker/) にあります。Python Discord BotからD1へ直接接続せず、Memory APIを経由する構成です。現在のPR1では、認証付きMemory CRUD、Memory Source、D1 migration、dev/prod分離、ACL付き最小検索までを実装しています。短期会話履歴は従来どおりPython側で保持します。
+
+セットアップとデプロイ手順は [`memory-worker/README.md`](./memory-worker/README.md) を参照してください。
+
 
 ## Setup
 - Python 3.12+

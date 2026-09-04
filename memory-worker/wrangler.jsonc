@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "meowgent-memory",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-04",
+  "workers_dev": true,
+  "env": {
+    "dev": {
+      "name": "meowgent-memory-dev",
+      "d1_databases": [
+        {
+          "binding": "MEMORY_DB",
+          "database_name": "meowgent-dev",
+          "database_id": "00000000-0000-0000-0000-000000000001",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "secrets": {
+        "required": ["MEMORY_API_TOKEN"]
+      }
+    },
+    "prod": {
+      "name": "meowgent-memory-prod",
+      "d1_databases": [
+        {
+          "binding": "MEMORY_DB",
+          "database_name": "yukari",
+          "database_id": "d119d4be-d94f-4789-afe4-28d1b1772f3a",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "secrets": {
+        "required": ["MEMORY_API_TOKEN"]
+      }
+    }
+  }
+}
