@@ -54,10 +54,17 @@ class Meowgent:
       *conversation_messages,
     ]
     output_messages = list(conversation_messages)
+    previous_response_id = None
+    input_items = None
 
     for _ in range(recursion_limit):
       logger.info(f"[ainvoke] Messages passed to the provider: {[message.content for message in messages]}")
-      response = await self.provider.generate(messages, list(self.tools.values()))
+      response = await self.provider.generate(
+        messages,
+        list(self.tools.values()),
+        previous_response_id=previous_response_id,
+        input_items=input_items,
+      )
       assistant_message = response.to_message()
       messages.append(assistant_message)
       output_messages.append(assistant_message)
@@ -69,11 +76,12 @@ class Meowgent:
 
       logger.info("[ainvoke] Tool calls have been detected.")
       await self.reduce_stamina(5) # スタミナ使う
+      tool_outputs = []
       for tool_call in response.tool_calls:
         function = tool_call.get("function", {})
         tool_name = function.get("name")
         tool_args = parse_tool_arguments(function.get("arguments"))
-        tool_id = tool_call.get("id")
+        tool_id = tool_call.get("call_id") or tool_call.get("id")
         tool = self.tools.get(tool_name)
         try:
           if tool is None:
@@ -92,6 +100,14 @@ class Meowgent:
         )
         messages.append(tool_message)
         output_messages.append(tool_message)
+        tool_outputs.append({
+          "type": "function_call_output",
+          "call_id": tool_id,
+          "output": tool_message.content,
+        })
+
+      previous_response_id = response.response_id
+      input_items = tool_outputs
 
     logger.error("Meowgent recursion limit reached before final response.")
     return {"messages": output_messages}

@@ -28,6 +28,11 @@ def _bool_env(name: str, default: bool = False) -> bool:
   return value.lower() == "true"
 
 
+def _optional_env(name: str) -> str | None:
+  value = os.environ.get(name)
+  return value if value else None
+
+
 @dataclass(frozen=True)
 class OpenAIConfig:
   api_key: str | None
@@ -35,6 +40,7 @@ class OpenAIConfig:
   model: str | None
   max_tokens: int
   temperature: float
+  reasoning_effort: str | None
 
 
 @dataclass(frozen=True)
@@ -65,6 +71,7 @@ def load_config() -> AppConfig:
       model=os.environ.get("OPEN_AI_MODEL"),
       max_tokens=_int_env("OPEN_AI_MAX_TOKEN"),
       temperature=_float_env("TEMPERATURE", 1),
+      reasoning_effort=_optional_env("OPEN_AI_REASONING_EFFORT"),
     ),
     voice_notification=VoiceNotificationConfig(
       enabled=_bool_env("VOICE_NOTIFICATION_ENABLED"),

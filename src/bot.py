@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 
 from config import load_config
-from llm import OpenAICompatibleChatProvider, ToolDefinition
+from llm import OpenAICompatibleResponsesProvider, ToolDefinition
 from tools.get_current_time import get_current_time
 from tools.task_manager import TaskManager
 from tools.web_search import web_search
@@ -30,12 +30,13 @@ async def on_ready():
   from meowgent import Meowgent
 
   # load llm
-  provider = OpenAICompatibleChatProvider(
+  provider = OpenAICompatibleResponsesProvider(
     model=config.openai.model,
     api_key=config.openai.api_key,
     base_url=config.openai.api_url,
     max_tokens=config.openai.max_tokens,
-    temperature=config.openai.temperature
+    temperature=config.openai.temperature,
+    reasoning_effort=config.openai.reasoning_effort,
   )
 
   # Task Manager
