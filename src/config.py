@@ -63,6 +63,12 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
+class AgentConfig:
+  max_steps: int
+  tool_timeout_seconds: float
+
+
+@dataclass(frozen=True)
 class AppConfig:
   discord_token: str | None
   character_prompt: str
@@ -70,6 +76,7 @@ class AppConfig:
   openai: OpenAIConfig
   voice_notification: VoiceNotificationConfig
   memory: MemoryConfig
+  agent: AgentConfig
 
 
 def load_config() -> AppConfig:
@@ -95,5 +102,9 @@ def load_config() -> AppConfig:
       api_url=_optional_env("MEMORY_API_URL"),
       api_token=_optional_env("MEMORY_API_TOKEN"),
       timeout_seconds=_float_env("MEMORY_API_TIMEOUT", 10.0),
+    ),
+    agent=AgentConfig(
+      max_steps=_int_env("AGENT_MAX_STEPS", 8),
+      tool_timeout_seconds=_float_env("AGENT_TOOL_TIMEOUT", 30.0),
     ),
   )

@@ -9,6 +9,23 @@ Pythonで構築されたカスタマイズ可能なインタラクティブDisco
 - ツールの統合: Web検索などの外部ツールをサポート (SERP API)
 - 環境変数による設定: ボットの挙動やメッセージを環境変数で簡単に設定可能。
 
+## Agent runtime
+
+meowgentは1回の返信の中でToolを複数ステップ・並列に使って調べてから答えます。
+
+| Tool | 内容 |
+| --- | --- |
+| `web_search` | Web検索 (上位5件のタイトル・URL・スニペット) |
+| `fetch_url` | 公開Webページの本文を取得。プライベートIP・非標準ポート宛ては拒否 |
+| `read_channel_history` | 今いるチャンネルの過去メッセージを最大50件読む |
+| `create_task` / `list_tasks` / `cancel_task` | 今いるチャンネルでの予約実行 (リマインダーや後追い確認)。再起動で消えます |
+| `get_current_time` | 現在時刻 |
+| `remember_memory` / `search_memory` | 長期記憶 (Memory API設定時のみ) |
+
+- `AGENT_MAX_STEPS` (default 8): 1返信で使えるToolラウンド数。使い切るとToolなしで最終回答を生成します。
+- `AGENT_TOOL_TIMEOUT` (default 30): Tool 1回あたりのタイムアウト秒。
+- 2000文字を超える返信は複数メッセージに分割して送信します。長い回答をさせたい場合は `OPEN_AI_MAX_TOKEN` も引き上げてください。
+
 ## Long-term memory (Phase 1)
 
 Cloudflare Worker + D1で構成する長期記憶APIは [`memory-worker/`](./memory-worker/) にあります。Python Discord BotからD1へ直接接続せず、Memory APIを経由する構成です。PR1のAPI基盤に加えて、PR2では会話中にmeowgent自身が使う`remember_memory` / `search_memory` Toolを実装しています。短期会話履歴は従来どおりPython側で保持します。

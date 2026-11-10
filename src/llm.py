@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import json
 from dataclasses import dataclass
@@ -102,7 +103,11 @@ class ToolDefinition:
     if not isinstance(args, dict):
       args = {"input": args}
 
-    result = self.handler(**args)
+    if inspect.iscoroutinefunction(self.handler):
+      return await self.handler(**args)
+
+    # Synchronous handlers (HTTP clients, etc.) must not block the Discord event loop.
+    result = await asyncio.to_thread(self.handler, **args)
     if inspect.isawaitable(result):
       return await result
     return result

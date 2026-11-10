@@ -11,6 +11,7 @@ import random
 from logging import getLogger
 
 from config import load_config
+from discord_utils import split_discord_message
 from llm import LLMMessage
 from memory.models import MemoryContext
 
@@ -135,8 +136,9 @@ class EventsCog(commands.Cog):
           return
         # Format and guard against empty content
         random_reply_text = self.safe_text_from_content(content)
-        m = await message.channel.send(random_reply_text)
-        self.add_message_to_history(m, role="assistant")
+        for chunk in split_discord_message(random_reply_text):
+          m = await message.channel.send(chunk)
+          self.add_message_to_history(m, role="assistant")
 
       await self.wait_reply(m, messages)
       return
@@ -453,7 +455,7 @@ class EventsCog(commands.Cog):
           "messages": conversation_messages,
           "current_channel_id": message.channel.id,
         },
-        config={"configurable": {"thread_id": message.channel.id, "recursion_limit": 5}},
+        config={"configurable": {"thread_id": message.channel.id}},
         memory_context=memory_context,
       )
 
@@ -528,8 +530,14 @@ class EventsCog(commands.Cog):
       return
     # Format and guard against empty content
     reply_text = self.safe_text_from_content(content)
-    reply_message = await message.reply(reply_text)
-    self.add_message_to_history(reply_message, role="assistant")
+    reply_message = None
+    for chunk in split_discord_message(reply_text):
+      # Only the first chunk is a reply; the rest follow as plain channel messages.
+      if reply_message is None:
+        reply_message = await message.reply(chunk)
+      else:
+        reply_message = await message.channel.send(chunk)
+      self.add_message_to_history(reply_message, role="assistant")
 
     await self.wait_reply(reply_message, messages)
 
